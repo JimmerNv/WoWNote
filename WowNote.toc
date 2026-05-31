@@ -1,0 +1,9 @@
+## Interface: 30300
+## Title: Titan Panel [|cffeda55fWowNote|r]
+## Notes: Account-wide Markdown notes with GUI, GUIDs, item links and talent planner for WoW 3.3.5a
+## Author: Johannes / ChatGPT
+## Version: 1.9.30-channel-safe-no-share-menu
+## SavedVariables: WowNoteDB
+## OptionalDeps: Titan
+
+WowNote.lua

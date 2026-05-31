@@ -1,0 +1,23 @@
+# OS/editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Packaging output
+dist/
+*.zip
+*.tar.gz
+
+# WoW runtime/user data
+WTF/
+Cache/
+Logs/
+Errors/
+Screenshots/
+
+# Temporary files
+*.tmp
+*.bak

@@ -1,0 +1,34 @@
+name: Package Addon
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "WowNote.lua"
+      - "WowNote.toc"
+      - ".github/workflows/package.yml"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create addon ZIP
+        run: |
+          mkdir -p build/WowNote
+          cp WowNote.lua build/WowNote/
+          cp WowNote.toc build/WowNote/
+          cd build
+          zip -r WowNote.zip WowNote
+
+      - name: Upload addon ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: WowNote-installable
+          path: build/WowNote.zip
+          if-no-files-found: error
