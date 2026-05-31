@@ -1,10 +1,9 @@
 name: Build Release ZIP
 
 on:
-  release:
-    types:
-      - created
-      - published
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
@@ -23,11 +22,12 @@ jobs:
           cp WowNote.lua build/WowNote/
           cp WowNote.toc build/WowNote/
           cd build
-          zip -r WowNote-${{ github.event.release.tag_name }}.zip WowNote
+          zip -r "WowNote-${GITHUB_REF_NAME}.zip" WowNote
 
-      - name: Upload ZIP to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Create GitHub Release and upload ZIP
+        uses: softprops/action-gh-release@v3
         with:
-          files: build/WowNote-${{ github.event.release.tag_name }}.zip
+          files: build/WowNote-${{ github.ref_name }}.zip
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
