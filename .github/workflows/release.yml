@@ -1,0 +1,33 @@
+name: Build Release ZIP
+
+on:
+  release:
+    types:
+      - created
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Create installable addon ZIP
+        run: |
+          mkdir -p build/WowNote
+          cp WowNote.lua build/WowNote/
+          cp WowNote.toc build/WowNote/
+          cd build
+          zip -r WowNote-${{ github.event.release.tag_name }}.zip WowNote
+
+      - name: Upload ZIP to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/WowNote-${{ github.event.release.tag_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
