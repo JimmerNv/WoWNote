@@ -329,7 +329,12 @@ RefreshMarkdownView = function()
     local content = contentEdit and contentEdit:GetText() or ""
     local rendered = RenderMarkdown(content)
 
-    if contentViewMessage then
+    -- Use a top-anchored FontString for rendered note content.
+    -- ScrollingMessageFrame behaves like a chat frame and bottom-aligns short text,
+    -- which made the note view look like a large empty box with the content at the bottom.
+    if contentViewText then
+        contentViewText:SetText(rendered)
+    elseif contentViewMessage then
         contentViewMessage:Clear()
         for line in string.gmatch(rendered .. "\n", "(.-)\n") do
             contentViewMessage:AddMessage(line, 1, 1, 1)
@@ -339,8 +344,6 @@ RefreshMarkdownView = function()
         elseif contentViewMessage.ScrollToBottom then
             contentViewMessage:ScrollToBottom()
         end
-    elseif contentViewText then
-        contentViewText:SetText(rendered)
     end
 
     if contentViewText and contentViewText.GetStringHeight and contentViewFrame then
@@ -652,6 +655,8 @@ RefreshList = function()
             button = CreateFrame("Button", nil, listFrame)
             button:SetHeight(22)
             button:SetWidth(180)
+            button:EnableMouse(true)
+            button:SetFrameLevel(listFrame:GetFrameLevel() + 2)
             button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
             button.selectedTexture = button:CreateTexture(nil, "BACKGROUND")
             button.selectedTexture:SetAllPoints(button)
@@ -679,11 +684,18 @@ RefreshList = function()
         else
             button:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 0, 0)
         end
+        button:SetScript("OnMouseDown", function(self, mouseButton)
+            -- Load notes on mouse-down as well as click. Some high-strata child frames
+            -- in older 3.3.5a clients can steal the mouse-up event after focus changes.
+            if mouseButton == "LeftButton" and self.noteGuid then
+                LoadNote(self.noteGuid)
+            end
+        end)
         button:SetScript("OnClick", function(self, mouseButton)
             if mouseButton == "RightButton" then
                 LoadNote(self.noteGuid)
                 ShowNoteContextMenu(self.noteGuid)
-            else
+            elseif self.noteGuid then
                 LoadNote(self.noteGuid)
             end
         end)
@@ -1101,6 +1113,214 @@ local function DeserializeNote(text)
         end
     end
     return note
+end
+
+
+WOWNOTE_EXPORT_WRAPPER_PREFIX = "WNX1\n"
+
+function WowNote_EncodeNoteForExport(note)
+    local serialized = SerializeNote(note)
+    local compressed = CompressText(serialized)
+    local payload = "B64:" .. Base64Encode(compressed)
+    return Base64Encode(WOWNOTE_EXPORT_WRAPPER_PREFIX .. payload), string.len(serialized or ""), string.len(compressed or "")
+end
+
+function WowNote_DecodeExportedNote(exportText)
+    exportText = Trim(exportText or "")
+    exportText = string.gsub(exportText, "%s+", "")
+    if exportText == "" then
+        return nil, "No import text entered."
+    end
+
+    local decoded = Base64Decode(exportText)
+    local payload
+    if string.sub(decoded or "", 1, string.len(WOWNOTE_EXPORT_WRAPPER_PREFIX)) == WOWNOTE_EXPORT_WRAPPER_PREFIX then
+        payload = string.sub(decoded, string.len(WOWNOTE_EXPORT_WRAPPER_PREFIX) + 1)
+    elseif string.sub(exportText, 1, 4) == "B64:" then
+        payload = exportText
+    else
+        return nil, "Invalid WowNote export text."
+    end
+
+    local compressed
+    if string.sub(payload or "", 1, 4) == "B64:" then
+        compressed = Base64Decode(string.sub(payload, 5))
+    else
+        compressed = PercentDecode(payload or "")
+    end
+
+    local serialized = DecompressText(compressed)
+    if not serialized or serialized == "" then
+        return nil, "Could not decode WowNote export text."
+    end
+
+    local note = DeserializeNote(serialized)
+    if not note or ((note.title or "") == "" and (note.content or "") == "") then
+        return nil, "Decoded text does not contain a note."
+    end
+
+    note.title = Trim(note.title or "Untitled")
+    if note.title == "" then note.title = "Untitled" end
+    note.content = note.content or ""
+    note.version = note.version or WOWNOTE_NOTE_FORMAT_VERSION
+    return note, nil
+end
+
+function WowNote_LoadImportedNoteIntoEditor(note)
+    CreateUI()
+    currentGuid = nil
+    titleEdit:SetText(note.title or "Untitled")
+    contentEdit:SetText(note.content or "")
+    RefreshMarkdownView()
+    SetEditMode(false)
+    SetStatus("Imported note loaded. Click Save to store it.")
+    if RefreshList then RefreshList() end
+end
+
+function WowNote_OpenNoteImportExportDialog(mode, initialText, status)
+    CreateUI()
+
+    if not WowNoteImportExportFrame then
+        WowNoteImportExportFrame = CreateFrame("Frame", "WowNoteImportExportFrame", UIParent)
+        WowNoteImportExportFrame:SetWidth(640)
+        WowNoteImportExportFrame:SetHeight(420)
+        WowNoteImportExportFrame:SetPoint("CENTER")
+        WowNoteImportExportFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+        WowNoteImportExportFrame:SetFrameLevel(120)
+        WowNoteImportExportFrame:SetToplevel(true)
+        WowNoteImportExportFrame:EnableMouse(true)
+        WowNoteImportExportFrame:SetMovable(true)
+        WowNoteImportExportFrame:RegisterForDrag("LeftButton")
+        WowNoteImportExportFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+        WowNoteImportExportFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+        WowNoteImportExportFrame:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true,
+            tileSize = 32,
+            edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 }
+        })
+
+        WowNoteImportExportFrame.title = WowNoteImportExportFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        WowNoteImportExportFrame.title:SetPoint("TOPLEFT", WowNoteImportExportFrame, "TOPLEFT", 18, -16)
+
+        local close = CreateFrame("Button", nil, WowNoteImportExportFrame, "UIPanelCloseButton")
+        close:SetPoint("TOPRIGHT", WowNoteImportExportFrame, "TOPRIGHT", -4, -4)
+
+        local label = WowNoteImportExportFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        label:SetPoint("TOPLEFT", WowNoteImportExportFrame, "TOPLEFT", 24, -52)
+        label:SetText("Export/import text")
+
+        local bg = CreateFrame("Frame", nil, WowNoteImportExportFrame)
+        bg:SetPoint("TOPLEFT", WowNoteImportExportFrame, "TOPLEFT", 22, -70)
+        bg:SetWidth(590)
+        bg:SetHeight(270)
+        bg:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true,
+            tileSize = 16,
+            edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        })
+        bg:SetBackdropColor(0, 0, 0, 0.85)
+
+        local scroll = CreateFrame("ScrollFrame", "WowNoteImportExportScrollFrame", bg, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -4)
+        scroll:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -28, 4)
+
+        WowNoteImportExportEditBox = MakeEditBox(scroll, true)
+        WowNoteImportExportEditBox:SetWidth(540)
+        WowNoteImportExportEditBox:SetHeight(900)
+        WowNoteImportExportEditBox:SetScript("OnCursorChanged", function(self, x, y, w, h)
+            if ScrollingEdit_OnCursorChanged then
+                ScrollingEdit_OnCursorChanged(self, x, y, w, h)
+            end
+        end)
+        WowNoteImportExportEditBox:SetScript("OnUpdate", function(self, elapsed)
+            if ScrollingEdit_OnUpdate then
+                ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
+            end
+        end)
+        WowNoteImportExportEditBox:SetScript("OnTextChanged", function(self)
+            if ScrollingEdit_OnTextChanged then
+                ScrollingEdit_OnTextChanged(self, self:GetParent())
+            end
+        end)
+        scroll:SetScrollChild(WowNoteImportExportEditBox)
+
+        WowNoteImportExportStatusText = WowNoteImportExportFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        WowNoteImportExportStatusText:SetPoint("TOPLEFT", WowNoteImportExportFrame, "TOPLEFT", 24, -350)
+        WowNoteImportExportStatusText:SetWidth(580)
+        WowNoteImportExportStatusText:SetJustifyH("LEFT")
+
+        WowNoteImportExportFrame.importButton = MakeButton(WowNoteImportExportFrame, "Import", 90, 24)
+        WowNoteImportExportFrame.importButton:SetPoint("BOTTOMLEFT", WowNoteImportExportFrame, "BOTTOMLEFT", 24, 22)
+        WowNoteImportExportFrame.importButton:SetScript("OnClick", function()
+            local note, err = WowNote_DecodeExportedNote(WowNoteImportExportEditBox:GetText() or "")
+            if not note then
+                WowNoteImportExportStatusText:SetText(err or "Import failed.")
+                SetStatus(err or "Import failed")
+                return
+            end
+            WowNote_LoadImportedNoteIntoEditor(note)
+            WowNoteImportExportStatusText:SetText("Imported: " .. (note.title or "Untitled") .. ". Click Save to store it.")
+            WowNoteImportExportFrame:Hide()
+        end)
+
+        WowNoteImportExportFrame.selectButton = MakeButton(WowNoteImportExportFrame, "Select all", 100, 24)
+        WowNoteImportExportFrame.selectButton:SetPoint("LEFT", WowNoteImportExportFrame.importButton, "RIGHT", 8, 0)
+        WowNoteImportExportFrame.selectButton:SetScript("OnClick", function()
+            WowNoteImportExportEditBox:SetFocus()
+            WowNoteImportExportEditBox:HighlightText()
+        end)
+
+        local closeButton = MakeButton(WowNoteImportExportFrame, "Close", 90, 24)
+        closeButton:SetPoint("LEFT", WowNoteImportExportFrame.selectButton, "RIGHT", 8, 0)
+        closeButton:SetScript("OnClick", function() WowNoteImportExportFrame:Hide() end)
+    end
+
+    if mode == "export" then
+        WowNoteImportExportFrame.title:SetText("Export WowNote note")
+        WowNoteImportExportFrame.importButton:Hide()
+        WowNoteImportExportFrame.selectButton:ClearAllPoints()
+        WowNoteImportExportFrame.selectButton:SetPoint("BOTTOMLEFT", WowNoteImportExportFrame, "BOTTOMLEFT", 24, 22)
+        WowNoteImportExportEditBox:SetText(initialText or "")
+        WowNoteImportExportStatusText:SetText(status or "Copy this text and paste it into another WowNote client via Import.")
+        WowNoteImportExportEditBox:SetFocus()
+        WowNoteImportExportEditBox:HighlightText()
+    else
+        WowNoteImportExportFrame.title:SetText("Import WowNote note")
+        WowNoteImportExportFrame.importButton:Show()
+        WowNoteImportExportFrame.selectButton:ClearAllPoints()
+        WowNoteImportExportFrame.selectButton:SetPoint("LEFT", WowNoteImportExportFrame.importButton, "RIGHT", 8, 0)
+        WowNoteImportExportEditBox:SetText(initialText or "")
+        WowNoteImportExportStatusText:SetText(status or "Paste exported WowNote text here, then click Import.")
+        WowNoteImportExportEditBox:SetFocus()
+        WowNoteImportExportEditBox:HighlightText(0, 0)
+    end
+
+    WowNoteImportExportFrame:Show()
+    if WowNoteImportExportFrame.Raise then WowNoteImportExportFrame:Raise() end
+end
+
+function WowNote_ExportCurrentNoteToDialog()
+    InitDB()
+    if not currentGuid or not WowNoteDB.notes[currentGuid] then
+        SetStatus("No note selected")
+        Print("No saved note selected. Save first or select a note on the left.")
+        return
+    end
+
+    local note = WowNoteDB.notes[currentGuid]
+    local text, originalSize, compressedSize = WowNote_EncodeNoteForExport(note)
+    WowNote_OpenNoteImportExportDialog("export", text, "Exported " .. tostring(note.title or "Untitled") .. " (RLE " .. tostring(compressedSize or "?") .. "/" .. tostring(originalSize or "?") .. " bytes).")
+    SetStatus("Export ready: copy the selected text")
+end
+
+function WowNote_OpenImportNoteDialog()
+    WowNote_OpenNoteImportExportDialog("import", "", "Paste exported WowNote text here, then click Import.")
 end
 
 BuildTransferId = function()
@@ -1716,10 +1936,14 @@ CreateUI = function()
     local listScroll = CreateFrame("ScrollFrame", "WowNoteListScrollFrame", leftBg, "UIPanelScrollFrameTemplate")
     listScroll:SetPoint("TOPLEFT", leftBg, "TOPLEFT", 8, -8)
     listScroll:SetPoint("BOTTOMRIGHT", leftBg, "BOTTOMRIGHT", -28, 8)
+    listScroll:EnableMouse(true)
+    listScroll:SetFrameLevel(leftBg:GetFrameLevel() + 2)
 
     listFrame = CreateFrame("Frame", nil, listScroll)
     listFrame:SetWidth(185)
     listFrame:SetHeight(360)
+    listFrame:EnableMouse(true)
+    listFrame:SetFrameLevel(listScroll:GetFrameLevel() + 1)
     listScroll:SetScrollChild(listFrame)
 
     local titleLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -1794,27 +2018,14 @@ CreateUI = function()
         SetEditMode(true)
         FocusContentEditor()
     end)
-    contentViewMessage = CreateFrame("ScrollingMessageFrame", nil, contentViewFrame)
-    contentViewMessage:SetPoint("TOPLEFT", contentViewFrame, "TOPLEFT", 6, -6)
-    contentViewMessage:SetPoint("BOTTOMRIGHT", contentViewFrame, "BOTTOMRIGHT", -6, 6)
-    contentViewMessage:SetFontObject(ChatFontNormal)
-    contentViewMessage:SetJustifyH("LEFT")
-    contentViewMessage:SetMaxLines(2000)
-    contentViewMessage:SetFading(false)
-    contentViewMessage:SetInsertMode("BOTTOM")
-    contentViewMessage:EnableMouse(true)
-    if contentViewMessage.SetHyperlinksEnabled then
-        contentViewMessage:SetHyperlinksEnabled(true)
-    end
-    contentViewMessage:SetScript("OnHyperlinkEnter", function(self, linkData, linkText)
-        ShowHyperlinkTooltip(self, linkData)
-    end)
-    contentViewMessage:SetScript("OnHyperlinkLeave", HideHyperlinkTooltip)
-    contentViewMessage:SetScript("OnHyperlinkClick", HandleHyperlinkClick)
-    contentViewMessage:EnableMouseWheel(true)
-    contentViewMessage:SetScript("OnMouseWheel", function(self, delta)
-        ScrollMarkdownView(delta)
-    end)
+    contentViewMessage = nil
+    contentViewText = contentViewFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    contentViewText:SetPoint("TOPLEFT", contentViewFrame, "TOPLEFT", 6, -6)
+    contentViewText:SetWidth(410)
+    contentViewText:SetJustifyH("LEFT")
+    contentViewText:SetJustifyV("TOP")
+    contentViewText:SetTextColor(1, 1, 1, 1)
+    contentViewText:SetText("")
     contentViewFrame:EnableMouseWheel(true)
     contentViewFrame:SetScript("OnMouseWheel", function(self, delta)
         ScrollMarkdownView(delta)
@@ -1825,8 +2036,6 @@ CreateUI = function()
             ScrollMarkdownView(delta)
         end
     end)
-    contentViewText = nil
-
     contentEdit = MakeEditBox(contentScroll, true)
     contentEdit:SetWidth(422)
     contentEdit:SetHeight(1800)
@@ -1875,6 +2084,13 @@ CreateUI = function()
     talentButton:SetPoint("LEFT", editToggleButton, "RIGHT", 8, 0)
     talentButton:SetScript("OnClick", function() WowNote_OpenTalents() end)
 
+    local exportButton = MakeButton(frame, "Export", 75, 24)
+    exportButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 256, -452)
+    exportButton:SetScript("OnClick", function() WowNote_ExportCurrentNoteToDialog() end)
+
+    local importButton = MakeButton(frame, "Import", 75, 24)
+    importButton:SetPoint("LEFT", exportButton, "RIGHT", 8, 0)
+    importButton:SetScript("OnClick", function() WowNote_OpenImportNoteDialog() end)
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
@@ -1884,11 +2100,11 @@ CreateUI = function()
     raidPlannerBottomButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 14)
     raidPlannerBottomButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
 
-    local autoLootBottomButton = MakeButton(frame, "Auto Loot", 105, 24)
+    local autoLootBottomButton = MakeButton(frame, "Loot Tools", 105, 24)
     autoLootBottomButton:SetPoint("RIGHT", raidPlannerBottomButton, "LEFT", -8, 0)
     autoLootBottomButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Auto Loot Roller", 1, 0.82, 0)
+        GameTooltip:SetText("Loot Tools", 1, 0.82, 0)
         GameTooltip:AddLine("Open the automatic Greed/Disenchant roll settings.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
@@ -1897,7 +2113,7 @@ CreateUI = function()
         if WowNote_OpenAutoLootRoller then
             WowNote_OpenAutoLootRoller()
         else
-            Print("Auto Loot Roller module is not loaded.")
+            Print("Loot Tools module is not loaded.")
         end
     end)
 
@@ -3244,11 +3460,33 @@ SlashCmdList["WOWNOTE"] = function(msg)
         WowNote_OpenTalents()
     elseif lowerMsg == "raid" or lowerMsg == "raidplanner" or lowerMsg == "lfm" then
         WowNote_OpenRaidPlanner()
-    elseif lowerMsg == "loot" or lowerMsg == "looter" or lowerMsg == "lootroller" or lowerMsg == "autoroll" then
-        if WowNote_OpenAutoLootRoller then
+    elseif lowerMsg == "loot" or lowerMsg == "looter" or lowerMsg == "loottools" then
+        if WowNote_OpenLootTools then
+            WowNote_OpenLootTools("roll")
+        elseif WowNote_OpenAutoLootRoller then
             WowNote_OpenAutoLootRoller()
         else
-            Print("Auto Loot Roller module is not loaded.")
+            Print("Loot Tools module is not loaded.")
+        end
+    elseif lowerMsg == "loot sell" or lowerMsg == "autosell" or lowerMsg == "sell" then
+        if WowNote_OpenLootTools then
+            WowNote_OpenLootTools("sell")
+        else
+            Print("Loot Tools module is not loaded.")
+        end
+    elseif lowerMsg == "loot repair" or lowerMsg == "autorepair" or lowerMsg == "repair" then
+        if WowNote_OpenLootTools then
+            WowNote_OpenLootTools("repair")
+        else
+            Print("Loot Tools module is not loaded.")
+        end
+    elseif lowerMsg == "loot roll" or lowerMsg == "lootroller" or lowerMsg == "autoroll" then
+        if WowNote_OpenLootTools then
+            WowNote_OpenLootTools("roll")
+        elseif WowNote_OpenAutoLootRoller then
+            WowNote_OpenAutoLootRoller()
+        else
+            Print("Loot Tools module is not loaded.")
         end
     elseif lowerMsg == "talents load" or lowerMsg == "talent load" or lowerMsg == "load talents" then
         WowNote_OpenTalents()
@@ -3318,7 +3556,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("New note", TITAN_ID, "WowNote_NewFromTitan")
     TitanPanelRightClickMenu_AddCommand("Talent Planner", TITAN_ID, "WowNote_OpenTalents")
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
-    TitanPanelRightClickMenu_AddCommand("Loot Roller", TITAN_ID, "WowNote_OpenAutoLootRoller")
+    TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddSpacer()
     TitanPanelRightClickMenu_AddToggleIcon(TITAN_ID)
     TitanPanelRightClickMenu_AddToggleLabelText(TITAN_ID)

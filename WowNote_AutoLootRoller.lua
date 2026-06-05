@@ -9,10 +9,12 @@ local useMaxItemLevelCheck
 local qualityButton
 local minPlayerLevelEdit
 local maxItemLevelEdit
+local blacklistEdit
 local pendingRolls = {}
 local rollQueue = {}
 local tooltipScanner
 local tooltipLines = {}
+local textAreaCounter = 0
 
 local QUALITY_NAMES = {
     [2] = "Uncommon",
@@ -34,20 +36,21 @@ local function Trim(text)
 end
 
 local function EnsureDB()
-    if type(WowNoteDB) ~= "table" then
-        WowNoteDB = {}
+    if type(WowNoteCharDB) ~= "table" then
+        WowNoteCharDB = {}
     end
-    if type(WowNoteDB.autoLootRoller) ~= "table" then
-        WowNoteDB.autoLootRoller = {}
+    if type(WowNoteCharDB.autoLootRoller) ~= "table" then
+        WowNoteCharDB.autoLootRoller = {}
     end
 
-    local settings = WowNoteDB.autoLootRoller
+    local settings = WowNoteCharDB.autoLootRoller
     if settings.enabled == nil then settings.enabled = false end
     if settings.quality == nil then settings.quality = 2 end
     if settings.minPlayerLevel == nil then settings.minPlayerLevel = 80 end
     if settings.useMaxItemLevel == nil then settings.useMaxItemLevel = true end
     if settings.maxItemLevel == nil then settings.maxItemLevel = 220 end
     if settings.preferDisenchant == nil then settings.preferDisenchant = true end
+    if settings.blacklist == nil then settings.blacklist = "" end
     return settings
 end
 
@@ -75,6 +78,7 @@ local function UpdateControlsFromSettings()
     if qualityButton then qualityButton:SetText("Max rarity: " .. (QUALITY_NAMES[settings.quality] or "Uncommon")) end
     if minPlayerLevelEdit then minPlayerLevelEdit:SetText(tostring(settings.minPlayerLevel or 80)) end
     if maxItemLevelEdit then maxItemLevelEdit:SetText(tostring(settings.maxItemLevel or 220)) end
+    if blacklistEdit then blacklistEdit:SetText(tostring(settings.blacklist or "")) end
 
     local enabledText = settings.enabled and "enabled" or "disabled"
     SetStatus("Auto loot roller is " .. enabledText .. ".")
@@ -87,6 +91,7 @@ local function SaveControlsToSettings()
     if useMaxItemLevelCheck then settings.useMaxItemLevel = useMaxItemLevelCheck:GetChecked() and true or false end
     if minPlayerLevelEdit then settings.minPlayerLevel = ToNumber(minPlayerLevelEdit:GetText(), 80) end
     if maxItemLevelEdit then settings.maxItemLevel = ToNumber(maxItemLevelEdit:GetText(), 220) end
+    if blacklistEdit then settings.blacklist = blacklistEdit:GetText() or "" end
     UpdateControlsFromSettings()
 end
 
@@ -116,6 +121,53 @@ local function MakeEdit(parent, width, height, x, y)
     edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     edit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveControlsToSettings() end)
     edit:SetScript("OnEditFocusLost", function() SaveControlsToSettings() end)
+    return edit
+end
+
+
+local function MakeTextArea(parent, width, height, x, y)
+    local bg = CreateFrame("Frame", nil, parent)
+    bg:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    bg:SetSize(width, height)
+    bg:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    bg:SetBackdropColor(0, 0, 0, 0.85)
+
+    textAreaCounter = textAreaCounter + 1
+    local scroll = CreateFrame("ScrollFrame", "WowNoteAutoLootTextAreaScroll" .. textAreaCounter, bg, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -4)
+    scroll:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -28, 4)
+
+    local edit = CreateFrame("EditBox", nil, scroll)
+    edit:SetMultiLine(true)
+    edit:SetAutoFocus(false)
+    edit:SetFontObject(ChatFontNormal)
+    edit:SetWidth(width - 36)
+    edit:SetHeight(height * 2)
+    edit:SetScript("OnEscapePressed", function(self) self:ClearFocus(); SaveControlsToSettings() end)
+    edit:SetScript("OnEditFocusLost", function() SaveControlsToSettings() end)
+    edit:SetScript("OnCursorChanged", function(self, cx, cy, cw, ch)
+        if ScrollingEdit_OnCursorChanged then
+            ScrollingEdit_OnCursorChanged(self, cx, cy, cw, ch)
+        end
+    end)
+    edit:SetScript("OnUpdate", function(self, elapsed)
+        if ScrollingEdit_OnUpdate then
+            ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
+        end
+    end)
+    edit:SetScript("OnTextChanged", function(self)
+        if ScrollingEdit_OnTextChanged then
+            ScrollingEdit_OnTextChanged(self, self:GetParent())
+        end
+    end)
+    scroll:SetScrollChild(edit)
     return edit
 end
 
@@ -204,6 +256,33 @@ local function IsAlwaysExcluded(item)
 
     if tonumber(item.quality) == 4 and IsBindOnEquip(item.link) then
         return true, "Epic bind-on-equip items are always excluded"
+    end
+
+    return false
+end
+
+
+local function IsBlacklisted(item)
+    if not item then return false end
+    local settings = EnsureDB()
+    local blacklist = settings.blacklist or ""
+    if Trim(blacklist) == "" then return false end
+
+    local itemName = string.lower(Trim(item.name or ""))
+    local itemId = ExtractItemId(item.link)
+
+    for rawLine in string.gmatch(blacklist .. "\n", "(.-)\n") do
+        local entry = string.lower(Trim(rawLine or ""))
+        entry = string.gsub(entry, "^%-+%s*", "")
+        if entry ~= "" then
+            local numeric = tonumber(entry)
+            if numeric and itemId and numeric == itemId then
+                return true, "blacklisted item ID " .. tostring(numeric)
+            end
+            if itemName ~= "" and itemName == entry then
+                return true, "blacklisted item name"
+            end
+        end
     end
 
     return false
@@ -299,6 +378,14 @@ local function EvaluateRoll(rollID, attempt)
         return true
     end
 
+    local blacklisted, blacklistReason = IsBlacklisted(item)
+    if blacklisted then
+        if attempt == 1 then
+            Print("Auto roll skipped " .. (item.link or item.name or "loot") .. ": " .. blacklistReason .. ".")
+        end
+        return true
+    end
+
     local maxQuality = tonumber(settings.quality) or 2
     if item.quality > maxQuality then
         return true
@@ -378,7 +465,7 @@ local function CreateAutoLootRollerUI()
     if frame then return end
 
     frame = CreateFrame("Frame", "WowNoteAutoLootRollerFrame", UIParent)
-    frame:SetSize(410, 285)
+    frame:SetSize(470, 405)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetFrameLevel(100)
@@ -402,6 +489,10 @@ local function CreateAutoLootRollerUI()
     title:SetPoint("TOP", frame, "TOP", 0, -16)
     title:SetText("WowNote Auto Loot Roller")
 
+    local charText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    charText:SetPoint("TOP", frame, "TOP", 0, -34)
+    charText:SetText("Settings are saved per character.")
+
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, -6)
 
@@ -419,7 +510,10 @@ local function CreateAutoLootRollerUI()
     MakeLabel(frame, "Max item level", 42, -190)
     maxItemLevelEdit = MakeEdit(frame, 55, 22, 190, -185)
 
-    qualityButton = MakeButton(frame, "Max rarity: Uncommon", 180, 24, 42, -222)
+    MakeLabel(frame, "Blacklist (one item name or item ID per line)", 42, -222)
+    blacklistEdit = MakeTextArea(frame, 390, 80, 42, -240)
+
+    qualityButton = MakeButton(frame, "Max rarity: Uncommon", 180, 24, 42, -330)
     qualityButton:SetScript("OnClick", CycleQuality)
     qualityButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -430,7 +524,7 @@ local function CreateAutoLootRollerUI()
     end)
     qualityButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    local testButton = MakeButton(frame, "Save", 70, 24, 240, -222)
+    local testButton = MakeButton(frame, "Save", 70, 24, 240, -330)
     testButton:SetScript("OnClick", SaveControlsToSettings)
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

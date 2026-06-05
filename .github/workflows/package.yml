@@ -6,9 +6,10 @@ on:
     branches:
       - main
     paths:
-      - "WowNote.lua"
+      - "*.lua"
       - "WowNote.toc"
       - ".github/workflows/package.yml"
+      - "scripts/package.sh"
 
 jobs:
   package:
@@ -21,8 +22,10 @@ jobs:
       - name: Create addon ZIP
         run: |
           mkdir -p build/WowNote
-          cp WowNote.lua build/WowNote/
+
           cp WowNote.toc build/WowNote/
+          cp *.lua build/WowNote/
+
           cd build
           zip -r WowNote.zip WowNote
 
