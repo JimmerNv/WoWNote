@@ -1,9 +1,14 @@
 ## Interface: 30300
 ## Title: Titan Panel [|cffeda55fWowNote|r]
-## Notes: Account-wide Markdown notes with GUI, GUIDs, item links and talent planner for WoW 3.3.5a
+## Notes: Account-wide Markdown notes with GUI, GUIDs, item links, talent planner and raid LFM planner for WoW 3.3.5a
 ## Author: Johannes / ChatGPT
-## Version: 1.9.30-channel-safe-no-share-menu
+## Version: 1.9.54-auto-loot-confirm-queue
 ## SavedVariables: WowNoteDB
 ## OptionalDeps: Titan
 
 WowNote.lua
+WowNote_RaidPlanner_Core.lua
+WowNote_RaidPlanner_Roster.lua
+WowNote_RaidPlanner_UI.lua
+WowNote_Minimap.lua
+WowNote_AutoLootRoller.lua

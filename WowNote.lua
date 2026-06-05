@@ -66,6 +66,7 @@ local WowNote_OpenShare
 local SendCurrentNoteToPlayer
 local HandleAddonMessage
 local CreateUI
+local HookItemLinks
 
 local function Print(msg)
     DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg))
@@ -213,6 +214,9 @@ InitDB = function()
     end
     if type(WowNoteDB.share) ~= "table" then
         WowNoteDB.share = { sent = 0, received = 0 }
+    end
+    if type(WowNoteDB.raidPlannerPresets) ~= "table" then
+        WowNoteDB.raidPlannerPresets = {}
     end
     MigrateNotesToGuids()
 end
@@ -519,6 +523,25 @@ local function MakeButton(parent, text, width, height)
     button:SetHeight(height or 22)
     button:SetText(text)
     return button
+end
+
+local wowNoteTopFrameLevel = 100
+local function RaiseFrame(frameToRaise)
+    if not frameToRaise then return end
+    if frameToRaise.SetFrameStrata then frameToRaise:SetFrameStrata("FULLSCREEN_DIALOG") end
+    if frameToRaise.SetToplevel then frameToRaise:SetToplevel(true) end
+    if frameToRaise.SetFrameLevel then
+        wowNoteTopFrameLevel = wowNoteTopFrameLevel + 10
+        frameToRaise:SetFrameLevel(wowNoteTopFrameLevel)
+    end
+end
+
+local function EnableRaiseOnInteraction(frameToRaise)
+    if not frameToRaise then return end
+    if frameToRaise.SetToplevel then frameToRaise:SetToplevel(true) end
+    if frameToRaise.SetScript then
+        frameToRaise:SetScript("OnMouseDown", function(self) RaiseFrame(self) end)
+    end
 end
 
 local function SafeSetScript(frame, scriptName, handler)
@@ -1533,10 +1556,12 @@ CreateShareUI = function()
     shareFrame:SetWidth(430)
     shareFrame:SetHeight(205)
     shareFrame:SetPoint("CENTER", UIParent, "CENTER", 80, 40)
-    shareFrame:SetFrameStrata("DIALOG")
+    shareFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if shareFrame.SetToplevel then shareFrame:SetToplevel(true) end
     shareFrame:EnableMouse(true)
     shareFrame:SetMovable(true)
     shareFrame:RegisterForDrag("LeftButton")
+    EnableRaiseOnInteraction(shareFrame)
     shareFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     shareFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     shareFrame:SetBackdrop({
@@ -1632,6 +1657,7 @@ WowNote_OpenShare = function()
     CreateUI()
     CreateShareUI()
     shareFrame:Show()
+    RaiseFrame(shareFrame)
     if shareTargetEdit then
         shareTargetEdit:SetFocus()
     end
@@ -1644,10 +1670,12 @@ CreateUI = function()
     frame:SetWidth(760)
     frame:SetHeight(500)
     frame:SetPoint("CENTER")
-    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if frame.SetToplevel then frame:SetToplevel(true) end
     frame:EnableMouse(true)
     frame:SetMovable(true)
     frame:RegisterForDrag("LeftButton")
+    EnableRaiseOnInteraction(frame)
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     frame:SetBackdrop({
@@ -1847,9 +1875,31 @@ CreateUI = function()
     talentButton:SetPoint("LEFT", editToggleButton, "RIGHT", 8, 0)
     talentButton:SetScript("OnClick", function() WowNote_OpenTalents() end)
 
+
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
     statusText:SetText("Ready")
+
+    local raidPlannerBottomButton = MakeButton(frame, "Raid Planner", 105, 24)
+    raidPlannerBottomButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 14)
+    raidPlannerBottomButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
+
+    local autoLootBottomButton = MakeButton(frame, "Auto Loot", 105, 24)
+    autoLootBottomButton:SetPoint("RIGHT", raidPlannerBottomButton, "LEFT", -8, 0)
+    autoLootBottomButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Auto Loot Roller", 1, 0.82, 0)
+        GameTooltip:AddLine("Open the automatic Greed/Disenchant roll settings.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    autoLootBottomButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    autoLootBottomButton:SetScript("OnClick", function()
+        if WowNote_OpenAutoLootRoller then
+            WowNote_OpenAutoLootRoller()
+        else
+            Print("Auto Loot Roller module is not loaded.")
+        end
+    end)
 
     frame:SetScript("OnShow", function()
         InitDB()
@@ -1866,15 +1916,34 @@ function WowNote_Toggle()
         frame:Hide()
     else
         frame:Show()
+        RaiseFrame(frame)
     end
 end
 
 function WowNote_Open()
     CreateUI()
     frame:Show()
+    RaiseFrame(frame)
 end
 
-local function HookItemLinks()
+
+-- Shared helpers for split module files.
+-- Keep these small and stable so feature modules do not need to duplicate core helpers.
+WowNote_Internal = WowNote_Internal or {}
+WowNote_Internal.InitDB = InitDB
+WowNote_Internal.MakeButton = MakeButton
+WowNote_Internal.RaiseFrame = RaiseFrame
+WowNote_Internal.PercentEncode = PercentEncode
+WowNote_Internal.PercentDecode = PercentDecode
+WowNote_Internal.Base64Encode = Base64Encode
+WowNote_Internal.Base64Decode = Base64Decode
+WowNote_Internal.Trim = Trim
+WowNote_Internal.MakeEditBox = MakeEditBox
+WowNote_Internal.CompressText = CompressText
+WowNote_Internal.DecompressText = DecompressText
+
+local function WowNote_LoadItemModule()
+HookItemLinks = function()
     if originalChatEditInsertLink or not ChatEdit_InsertLink then return end
     originalChatEditInsertLink = ChatEdit_InsertLink
     ChatEdit_InsertLink = function(text)
@@ -2125,10 +2194,12 @@ CreateItemUI = function()
     itemFrame:SetWidth(620)
     itemFrame:SetHeight(430)
     itemFrame:SetPoint("CENTER", UIParent, "CENTER", 60, -35)
-    itemFrame:SetFrameStrata("DIALOG")
+    itemFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if itemFrame.SetToplevel then itemFrame:SetToplevel(true) end
     itemFrame:EnableMouse(true)
     itemFrame:SetMovable(true)
     itemFrame:RegisterForDrag("LeftButton")
+    EnableRaiseOnInteraction(itemFrame)
     itemFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     itemFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     itemFrame:SetBackdrop({
@@ -2277,10 +2348,15 @@ end
 WowNote_OpenItems = function()
     CreateItemUI()
     itemFrame:Show()
+    RaiseFrame(itemFrame)
     RefreshItemList()
 end
 
+end
+WowNote_LoadItemModule()
 
+
+local function WowNote_LoadTalentModule()
 local TALENT_CLASSES = {
     { key = "WARRIOR", name = "Warrior", trees = { "Arms", "Fury", "Protection" }, backgrounds = { "WarriorArms", "WarriorFury", "WarriorProtection" } },
     { key = "PALADIN", name = "Paladin", trees = { "Holy", "Protection", "Retribution" }, backgrounds = { "PaladinHoly", "PaladinProtection", "PaladinCombat" } },
@@ -3062,10 +3138,12 @@ CreateTalentUI = function()
     talentFrame:SetWidth(565)
     talentFrame:SetHeight(760)
     talentFrame:SetPoint("CENTER", UIParent, "CENTER", 35, 0)
-    talentFrame:SetFrameStrata("DIALOG")
+    talentFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if talentFrame.SetToplevel then talentFrame:SetToplevel(true) end
     talentFrame:EnableMouse(true)
     talentFrame:SetMovable(true)
     talentFrame:RegisterForDrag("LeftButton")
+    EnableRaiseOnInteraction(talentFrame)
     talentFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     talentFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
     talentFrame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
@@ -3147,8 +3225,12 @@ end
 WowNote_OpenTalents = function()
     CreateTalentUI()
     talentFrame:Show()
+    RaiseFrame(talentFrame)
     RefreshTalentPlanner()
 end
+
+end
+WowNote_LoadTalentModule()
 
 SLASH_WOWNOTE1 = "/wownote"
 SLASH_WOWNOTE2 = "/wn"
@@ -3160,6 +3242,14 @@ SlashCmdList["WOWNOTE"] = function(msg)
         ClearEditor()
     elseif lowerMsg == "talents" or lowerMsg == "talente" or lowerMsg == "talent" then
         WowNote_OpenTalents()
+    elseif lowerMsg == "raid" or lowerMsg == "raidplanner" or lowerMsg == "lfm" then
+        WowNote_OpenRaidPlanner()
+    elseif lowerMsg == "loot" or lowerMsg == "looter" or lowerMsg == "lootroller" or lowerMsg == "autoroll" then
+        if WowNote_OpenAutoLootRoller then
+            WowNote_OpenAutoLootRoller()
+        else
+            Print("Auto Loot Roller module is not loaded.")
+        end
     elseif lowerMsg == "talents load" or lowerMsg == "talent load" or lowerMsg == "load talents" then
         WowNote_OpenTalents()
         LoadTalentPlanFromCurrentNote()
@@ -3227,6 +3317,8 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Open", TITAN_ID, "WowNote_Open")
     TitanPanelRightClickMenu_AddCommand("New note", TITAN_ID, "WowNote_NewFromTitan")
     TitanPanelRightClickMenu_AddCommand("Talent Planner", TITAN_ID, "WowNote_OpenTalents")
+    TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
+    TitanPanelRightClickMenu_AddCommand("Loot Roller", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddSpacer()
     TitanPanelRightClickMenu_AddToggleIcon(TITAN_ID)
     TitanPanelRightClickMenu_AddToggleLabelText(TITAN_ID)
@@ -3243,7 +3335,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.9.29-channel",
+        version = "1.9.41-raidplanner",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",
@@ -3281,6 +3373,9 @@ local function CreateTitanPlugin()
     end
 end
 
+-- Minimap button moved to WowNote_Minimap.lua
+
+
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
@@ -3302,6 +3397,7 @@ eventFrame:SetScript("OnEvent", function(self, event, addon, ...)
         end
         CreateUI()
         CreateTitanPlugin()
+        if WowNote_CreateMinimapButton then WowNote_CreateMinimapButton() end
         JoinWowNoteChannel(true)
         if ChatFrame_AddMessageEventFilter then
             ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", WowNoteChatFilter)
