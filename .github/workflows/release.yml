@@ -36,6 +36,8 @@ jobs:
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
           gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Release ${GITHUB_REF_NAME}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload ZIP to GitHub Release
         run: |
