@@ -1,0 +1,8 @@
+<Bindings>
+    <Binding name="WOWNOTE_QUICKADD_FORCE" header="WOWNOTE">
+        WOWNOTE_QUICKADD_FORCE()
+    </Binding>
+    <Binding name="WOWNOTE_QUICKADD_NEVER">
+        WOWNOTE_QUICKADD_NEVER()
+    </Binding>
+</Bindings>

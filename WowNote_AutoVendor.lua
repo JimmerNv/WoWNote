@@ -28,9 +28,17 @@ local function EnsureVendorDB()
     local settings = WowNoteCharDB.autoVendor
     if settings.sellEnabled == nil then settings.sellEnabled = false end
     if settings.sellGray == nil then settings.sellGray = true end
+    if settings.sellWeapons == nil then settings.sellWeapons = false end
+    if settings.sellArmor == nil then settings.sellArmor = false end
+    if settings.sellEquipmentMaxQuality == nil then settings.sellEquipmentMaxQuality = 1 end
+    if settings.useEquipmentMaxItemLevel == nil then settings.useEquipmentMaxItemLevel = false end
+    if settings.equipmentMaxItemLevel == nil then settings.equipmentMaxItemLevel = 200 end
     if settings.printSellSummary == nil then settings.printSellSummary = true end
     if settings.forceSell == nil then settings.forceSell = "" end
     if settings.neverSell == nil then settings.neverSell = "" end
+    if settings.quickAddEnabled == nil then settings.quickAddEnabled = true end
+    if settings.quickAddModifier == nil then settings.quickAddModifier = "ALT" end
+    if settings.quickAddTarget == nil then settings.quickAddTarget = "force" end
     if settings.repairEnabled == nil then settings.repairEnabled = false end
     if settings.repairGuild == nil then settings.repairGuild = false end
     if settings.printRepairSummary == nil then settings.printRepairSummary = true end
@@ -88,6 +96,61 @@ local function MatchesList(item, names, ids)
     if item.id and ids[item.id] then return true end
     local name = item.name and string.lower(Trim(item.name)) or ""
     return name ~= "" and names[name]
+end
+
+local function GetListSortKey(entry)
+    local id = ExtractItemId(entry) or tonumber(Trim(entry))
+    if id then return string.format("id:%010d", id) end
+    local bracketName = ExtractBracketName(entry)
+    if bracketName and bracketName ~= "" then return string.lower(Trim(bracketName)) end
+    return string.lower(Trim(entry))
+end
+
+local function NormalizeListText(listText)
+    local seen = {}
+    local entries = {}
+    for rawLine in string.gmatch((listText or "") .. "\n", "(.-)\n") do
+        local entry = Trim(rawLine)
+        entry = string.gsub(entry, "^%-+%s*", "")
+        if entry ~= "" then
+            local key = GetListSortKey(entry)
+            if not seen[key] then
+                seen[key] = true
+                table.insert(entries, entry)
+            end
+        end
+    end
+    table.sort(entries, function(a, b) return GetListSortKey(a) < GetListSortKey(b) end)
+    return table.concat(entries, "\n")
+end
+
+local function AddEntryToListText(listText, entry)
+    entry = Trim(entry or "")
+    if entry == "" then return NormalizeListText(listText) end
+    local current = Trim(listText or "")
+    if current ~= "" then
+        current = current .. "\n" .. entry
+    else
+        current = entry
+    end
+    return NormalizeListText(current)
+end
+
+function WowNote_NormalizeAutoVendorList(listText)
+    return NormalizeListText(listText)
+end
+
+function WowNote_AddAutoVendorListEntry(listName, entry)
+    local settings = EnsureVendorDB()
+    local key = listName == "never" and "neverSell" or "forceSell"
+    settings[key] = AddEntryToListText(settings[key], entry)
+    Print("Added " .. tostring(entry) .. " to " .. (key == "neverSell" and "Never Sell" or "Force Sell") .. ".")
+    return settings[key]
+end
+
+function WowNote_GetAutoVendorListText(listName)
+    local settings = EnsureVendorDB()
+    return listName == "never" and (settings.neverSell or "") or (settings.forceSell or "")
 end
 
 local function EnsureTooltipScanner()
@@ -149,8 +212,79 @@ local function GetBagItem(bag, slot)
         count = count or 1,
         locked = locked,
         quality = itemQuality or quality,
+        itemLevel = itemLevel or 0,
+        itemType = itemType,
+        itemSubType = itemSubType,
+        itemEquipLoc = itemEquipLoc,
         vendorPrice = vendorPrice or 0,
     }
+end
+
+local function NormalizeText(text)
+    return string.lower(tostring(text or ""))
+end
+
+local function IsWeaponItem(item)
+    if not item then return false end
+    local itemType = NormalizeText(item.itemType)
+    local weaponText = NormalizeText(_G.WEAPON or "Weapon")
+    if itemType ~= "" and itemType == weaponText then return true end
+
+    local equipLoc = item.itemEquipLoc or ""
+    return equipLoc == "INVTYPE_WEAPON"
+        or equipLoc == "INVTYPE_2HWEAPON"
+        or equipLoc == "INVTYPE_WEAPONMAINHAND"
+        or equipLoc == "INVTYPE_WEAPONOFFHAND"
+        or equipLoc == "INVTYPE_RANGED"
+        or equipLoc == "INVTYPE_RANGEDRIGHT"
+        or equipLoc == "INVTYPE_THROWN"
+end
+
+local function IsArmorItem(item)
+    if not item then return false end
+    local itemType = NormalizeText(item.itemType)
+    local armorText = NormalizeText(_G.ARMOR or "Armor")
+    if itemType ~= "" and itemType == armorText then return true end
+
+    local equipLoc = item.itemEquipLoc or ""
+    return equipLoc == "INVTYPE_HEAD"
+        or equipLoc == "INVTYPE_NECK"
+        or equipLoc == "INVTYPE_SHOULDER"
+        or equipLoc == "INVTYPE_BODY"
+        or equipLoc == "INVTYPE_CHEST"
+        or equipLoc == "INVTYPE_ROBE"
+        or equipLoc == "INVTYPE_WAIST"
+        or equipLoc == "INVTYPE_LEGS"
+        or equipLoc == "INVTYPE_FEET"
+        or equipLoc == "INVTYPE_WRIST"
+        or equipLoc == "INVTYPE_HAND"
+        or equipLoc == "INVTYPE_FINGER"
+        or equipLoc == "INVTYPE_TRINKET"
+        or equipLoc == "INVTYPE_CLOAK"
+        or equipLoc == "INVTYPE_SHIELD"
+        or equipLoc == "INVTYPE_HOLDABLE"
+        or equipLoc == "INVTYPE_TABARD"
+end
+
+local function MatchesEquipmentRule(item, settings)
+    if not item then return false end
+    local quality = tonumber(item.quality) or -1
+    local maxQuality = tonumber(settings.sellEquipmentMaxQuality) or 1
+    if quality > maxQuality then return false end
+
+    if settings.useEquipmentMaxItemLevel then
+        local itemLevel = tonumber(item.itemLevel) or 0
+        local maxItemLevel = tonumber(settings.equipmentMaxItemLevel) or 0
+        if maxItemLevel > 0 and itemLevel > maxItemLevel then return false end
+    end
+
+    if settings.sellWeapons and IsWeaponItem(item) then
+        return true, "weapon rule"
+    end
+    if settings.sellArmor and IsArmorItem(item) then
+        return true, "armor rule"
+    end
+    return false
 end
 
 local function ShouldSellItem(item, settings, forceNames, forceIds, neverNames, neverIds)
@@ -170,6 +304,11 @@ local function ShouldSellItem(item, settings, forceNames, forceIds, neverNames, 
 
     if settings.sellGray and tonumber(item.quality) == 0 then
         return true, "gray item"
+    end
+
+    local equipmentMatch = MatchesEquipmentRule(item, settings)
+    if equipmentMatch then
+        return true, "equipment rule"
     end
 
     return false
@@ -287,6 +426,8 @@ function WowNote_SaveAutoVendorSettings(values)
             settings[key] = value
         end
     end
+    settings.forceSell = NormalizeListText(settings.forceSell or "")
+    settings.neverSell = NormalizeListText(settings.neverSell or "")
     return settings
 end
 

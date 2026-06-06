@@ -2117,6 +2117,23 @@ CreateUI = function()
         end
     end)
 
+    local raidIdsBottomButton = MakeButton(frame, "Raid IDs", 90, 24)
+    raidIdsBottomButton:SetPoint("RIGHT", autoLootBottomButton, "LEFT", -8, 0)
+    raidIdsBottomButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Raid ID Tracker", 1, 0.82, 0)
+        GameTooltip:AddLine("Show saved raid lockouts for all characters on this account.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    raidIdsBottomButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    raidIdsBottomButton:SetScript("OnClick", function()
+        if WowNote_OpenRaidIdTracker then
+            WowNote_OpenRaidIdTracker()
+        else
+            Print("Raid ID Tracker module is not loaded.")
+        end
+    end)
+
     frame:SetScript("OnShow", function()
         InitDB()
         RefreshList()
@@ -3488,6 +3505,12 @@ SlashCmdList["WOWNOTE"] = function(msg)
         else
             Print("Loot Tools module is not loaded.")
         end
+    elseif lowerMsg == "ids" or lowerMsg == "raidids" or lowerMsg == "raid ids" or lowerMsg == "lockouts" then
+        if WowNote_OpenRaidIdTracker then
+            WowNote_OpenRaidIdTracker()
+        else
+            Print("Raid ID Tracker module is not loaded.")
+        end
     elseif lowerMsg == "talents load" or lowerMsg == "talent load" or lowerMsg == "load talents" then
         WowNote_OpenTalents()
         LoadTalentPlanFromCurrentNote()
@@ -3557,6 +3580,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Talent Planner", TITAN_ID, "WowNote_OpenTalents")
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
     TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
+    TitanPanelRightClickMenu_AddCommand("Raid IDs", TITAN_ID, "WowNote_OpenRaidIdTracker")
     TitanPanelRightClickMenu_AddSpacer()
     TitanPanelRightClickMenu_AddToggleIcon(TITAN_ID)
     TitanPanelRightClickMenu_AddToggleLabelText(TITAN_ID)

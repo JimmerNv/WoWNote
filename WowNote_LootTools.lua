@@ -6,6 +6,11 @@ local activeTab = "roll"
 local tabs = {}
 local panels = {}
 local controls = {}
+local SELL_QUALITY_NAMES = { [0] = "Poor", [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Epic" }
+local SELL_QUALITY_VALUES = { 0, 1, 2, 3, 4 }
+local QUICK_ADD_MODIFIERS = { "ALT", "CTRL", "SHIFT" }
+local QUICK_ADD_MODIFIER_NAMES = { ALT = "Alt-click", CTRL = "Ctrl-click", SHIFT = "Shift-click" }
+local QUICK_ADD_TARGET_NAMES = { force = "Force Sell", never = "Never Sell" }
 local textAreaCounter = 0
 local activeTextArea = nil
 local linkHookInstalled = false
@@ -222,12 +227,26 @@ local function SaveSellControls()
     local values = {
         sellEnabled = controls.sellEnabled and controls.sellEnabled:GetChecked() and true or false,
         sellGray = controls.sellGray and controls.sellGray:GetChecked() and true or false,
+        sellWeapons = controls.sellWeapons and controls.sellWeapons:GetChecked() and true or false,
+        sellArmor = controls.sellArmor and controls.sellArmor:GetChecked() and true or false,
+        sellEquipmentMaxQuality = controls.sellEquipmentQualityValue or 1,
+        useEquipmentMaxItemLevel = controls.sellUseIlvl and controls.sellUseIlvl:GetChecked() and true or false,
+        equipmentMaxItemLevel = ToNumber(controls.sellMaxIlvl and controls.sellMaxIlvl:GetText(), 200),
         printSellSummary = controls.sellSummary and controls.sellSummary:GetChecked() and true or false,
+        quickAddEnabled = controls.quickAddEnabled and controls.quickAddEnabled:GetChecked() and true or false,
+        quickAddModifier = controls.quickAddModifierValue or "ALT",
+        quickAddTarget = controls.quickAddTargetValue or "force",
         forceSell = controls.forceSell and controls.forceSell:GetText() or "",
         neverSell = controls.neverSell and controls.neverSell:GetText() or "",
     }
+    if WowNote_NormalizeAutoVendorList then
+        values.forceSell = WowNote_NormalizeAutoVendorList(values.forceSell)
+        values.neverSell = WowNote_NormalizeAutoVendorList(values.neverSell)
+    end
     if WowNote_SaveAutoVendorSettings then WowNote_SaveAutoVendorSettings(values) end
-    SetStatus("Auto Sell settings saved for this character.")
+    if controls.forceSell then controls.forceSell:SetText(values.forceSell or "") end
+    if controls.neverSell then controls.neverSell:SetText(values.neverSell or "") end
+    SetStatus("Auto Sell settings saved and lists sorted for this character.")
 end
 
 local function SaveRepairControls()
@@ -262,7 +281,18 @@ local function UpdateSellControls()
     local settings = EnsureVendorDB()
     if controls.sellEnabled then controls.sellEnabled:SetChecked(settings.sellEnabled and true or false) end
     if controls.sellGray then controls.sellGray:SetChecked(settings.sellGray and true or false) end
+    if controls.sellWeapons then controls.sellWeapons:SetChecked(settings.sellWeapons and true or false) end
+    if controls.sellArmor then controls.sellArmor:SetChecked(settings.sellArmor and true or false) end
+    controls.sellEquipmentQualityValue = tonumber(settings.sellEquipmentMaxQuality) or 1
+    if controls.sellEquipmentQuality then controls.sellEquipmentQuality:SetText("Max equipment rarity: " .. (SELL_QUALITY_NAMES[controls.sellEquipmentQualityValue] or "Common")) end
+    if controls.sellUseIlvl then controls.sellUseIlvl:SetChecked(settings.useEquipmentMaxItemLevel and true or false) end
+    if controls.sellMaxIlvl then controls.sellMaxIlvl:SetText(tostring(settings.equipmentMaxItemLevel or 200)) end
     if controls.sellSummary then controls.sellSummary:SetChecked(settings.printSellSummary and true or false) end
+    if controls.quickAddEnabled then controls.quickAddEnabled:SetChecked(settings.quickAddEnabled and true or false) end
+    controls.quickAddModifierValue = settings.quickAddModifier or "ALT"
+    controls.quickAddTargetValue = settings.quickAddTarget or "force"
+    if controls.quickAddModifier then controls.quickAddModifier:SetText("Quick add modifier: " .. (QUICK_ADD_MODIFIER_NAMES[controls.quickAddModifierValue] or "Alt-click")) end
+    if controls.quickAddTarget then controls.quickAddTarget:SetText("Quick add target: " .. (QUICK_ADD_TARGET_NAMES[controls.quickAddTargetValue] or "Force Sell")) end
     if controls.forceSell then controls.forceSell:SetText(tostring(settings.forceSell or "")) end
     if controls.neverSell then controls.neverSell:SetText(tostring(settings.neverSell or "")) end
 end
@@ -335,6 +365,52 @@ local function CreateRollPanel(parent)
     return panel
 end
 
+local function CycleSellEquipmentQuality()
+    local current = controls.sellEquipmentQualityValue or 1
+    local nextValue = SELL_QUALITY_VALUES[1]
+    for index, value in ipairs(SELL_QUALITY_VALUES) do
+        if value == current then
+            nextValue = SELL_QUALITY_VALUES[index + 1] or SELL_QUALITY_VALUES[1]
+            break
+        end
+    end
+    controls.sellEquipmentQualityValue = nextValue
+    if controls.sellEquipmentQuality then
+        controls.sellEquipmentQuality:SetText("Max equipment rarity: " .. (SELL_QUALITY_NAMES[nextValue] or "Common"))
+    end
+    SaveSellControls()
+end
+
+local function CycleQuickAddModifier()
+    local current = controls.quickAddModifierValue or "ALT"
+    local nextValue = QUICK_ADD_MODIFIERS[1]
+    for index, value in ipairs(QUICK_ADD_MODIFIERS) do
+        if value == current then
+            nextValue = QUICK_ADD_MODIFIERS[index + 1] or QUICK_ADD_MODIFIERS[1]
+            break
+        end
+    end
+    controls.quickAddModifierValue = nextValue
+    if controls.quickAddModifier then controls.quickAddModifier:SetText("Quick add modifier: " .. (QUICK_ADD_MODIFIER_NAMES[nextValue] or nextValue)) end
+    SaveSellControls()
+end
+
+local function CycleQuickAddTarget()
+    local nextValue = (controls.quickAddTargetValue == "force") and "never" or "force"
+    controls.quickAddTargetValue = nextValue
+    if controls.quickAddTarget then controls.quickAddTarget:SetText("Quick add target: " .. (QUICK_ADD_TARGET_NAMES[nextValue] or nextValue)) end
+    SaveSellControls()
+end
+
+local function RefreshSellListsFromDB()
+    if controls.forceSell and WowNote_GetAutoVendorListText then controls.forceSell:SetText(WowNote_GetAutoVendorListText("force") or "") end
+    if controls.neverSell and WowNote_GetAutoVendorListText then controls.neverSell:SetText(WowNote_GetAutoVendorListText("never") or "") end
+end
+
+function WowNote_LootTools_RefreshAutoSellLists()
+    RefreshSellListsFromDB()
+end
+
 local function CreateSellPanel(parent)
     local panel = RaiseChild(CreateFrame("Frame", nil, parent), parent, 2)
     panel:EnableMouse(true)
@@ -343,20 +419,51 @@ local function CreateSellPanel(parent)
 
     controls.sellEnabled = MakeCheck(panel, "Enable auto sell", 22, -10)
     controls.sellGray = MakeCheck(panel, "Sell gray items automatically", 22, -40)
-    controls.sellSummary = MakeCheck(panel, "Print sell summary in chat", 22, -70)
+    controls.sellWeapons = MakeCheck(panel, "Sell weapons automatically", 22, -70)
+    controls.sellArmor = MakeCheck(panel, "Sell armor automatically", 250, -70)
+    controls.sellUseIlvl = MakeCheck(panel, "Use max item level for weapons/armor", 22, -100)
 
-    MakeSmallText(panel, "Shift-click items into a list field to insert item links. Never Sell has priority over Force Sell and gray selling.", 42, -98, 450)
+    MakeLabel(panel, "Max item level", 250, -100)
+    controls.sellMaxIlvl = MakeEdit(panel, 55, 22, 340, -95, true)
 
-    MakeLabel(panel, "Force Sell / Whitelist (one item name, item link, or item ID per line)", 42, -134)
-    controls.forceSell = MakeTextArea(panel, 430, 95, 42, -152)
+    controls.sellEquipmentQuality = MakeButton(panel, "Max equipment rarity: Common", 210, 24, 42, -132)
+    controls.sellEquipmentQuality:SetScript("OnClick", CycleSellEquipmentQuality)
 
-    MakeLabel(panel, "Never Sell / Blacklist (one item name, item link, or item ID per line)", 42, -258)
-    controls.neverSell = MakeTextArea(panel, 430, 95, 42, -276)
+    controls.sellSummary = MakeCheck(panel, "Print sell summary in chat", 22, -164)
 
-    local save = MakeButton(panel, "Save", 80, 24, 42, -385)
+    controls.quickAddEnabled = MakeCheck(panel, "Enable quick add from bag clicks", 250, -164)
+    controls.quickAddModifier = MakeButton(panel, "Quick add modifier: Alt-click", 190, 24, 42, -194)
+    controls.quickAddModifier:SetScript("OnClick", CycleQuickAddModifier)
+    controls.quickAddTarget = MakeButton(panel, "Quick add target: Force Sell", 190, 24, 250, -194)
+    controls.quickAddTarget:SetScript("OnClick", CycleQuickAddTarget)
+
+    MakeSmallText(panel, "Equipment auto-sell only affects Armor/Weapons up to the selected rarity and optional item level. Never Sell has priority. Lists are sorted and deduplicated when saved. You can also set key bindings for quick adding items.", 42, -224, 470)
+
+    MakeLabel(panel, "Force Sell / Whitelist (one item name, item link, or item ID per line)", 42, -258)
+    controls.forceSell = MakeTextArea(panel, 430, 62, 42, -276)
+
+    MakeLabel(panel, "Never Sell / Blacklist (one item name, item link, or item ID per line)", 42, -350)
+    controls.neverSell = MakeTextArea(panel, 430, 62, 42, -368)
+
+    local save = MakeButton(panel, "Save", 80, 24, 42, -437)
     save:SetScript("OnClick", SaveSellControls)
 
-    local runNow = MakeButton(panel, "Run now", 90, 24, 132, -385)
+    local sort = MakeButton(panel, "Sort lists", 90, 24, 132, -437)
+    sort:SetScript("OnClick", SaveSellControls)
+
+    local addForce = MakeButton(panel, "Quick Force", 105, 24, 232, -437)
+    addForce:SetScript("OnClick", function()
+        SaveSellControls()
+        if WowNote_StartAutoSellQuickAdd then WowNote_StartAutoSellQuickAdd("force") end
+    end)
+
+    local addNever = MakeButton(panel, "Quick Never", 105, 24, 347, -437)
+    addNever:SetScript("OnClick", function()
+        SaveSellControls()
+        if WowNote_StartAutoSellQuickAdd then WowNote_StartAutoSellQuickAdd("never") end
+    end)
+
+    local runNow = MakeButton(panel, "Run now", 90, 24, 42, -465)
     runNow:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_RunAutoVendorNow then WowNote_RunAutoVendorNow() end
