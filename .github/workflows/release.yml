@@ -19,8 +19,10 @@ jobs:
       - name: Create installable addon ZIP
         run: |
           mkdir -p build/WowNote
-          cp WowNote.lua build/WowNote/
+
           cp WowNote.toc build/WowNote/
+          cp *.lua build/WowNote/
+
           cd build
           zip -r "WowNote-${GITHUB_REF_NAME}.zip" WowNote
 
