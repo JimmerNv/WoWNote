@@ -2164,6 +2164,40 @@ CreateUI = function()
     raidPlannerButton:SetPoint("LEFT", lootToolsButton, "RIGHT", 8, 0)
     raidPlannerButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
 
+    local bankButton = MakeButton(frame, "Bank", 60, 24)
+    bankButton:SetPoint("LEFT", raidPlannerButton, "RIGHT", 8, 0)
+    bankButton:SetScript("OnClick", function()
+        if WowNote_OpenBankViewer then
+            WowNote_OpenBankViewer()
+        else
+            Print("Bank Viewer module is not loaded.")
+        end
+    end)
+
+    local trackerButton = MakeButton(frame, "Tracker", 78, 24)
+    trackerButton:SetPoint("LEFT", bankButton, "RIGHT", 8, 0)
+    trackerButton:SetScript("OnClick", function()
+        if WowNote_OpenItemTracker then
+            WowNote_OpenItemTracker()
+        else
+            Print("Item Tracker module is not loaded.")
+        end
+    end)
+
+    local restockButton = MakeButton(frame, "Restock", 80, 24)
+    restockButton:SetPoint("LEFT", tacticsButton, "RIGHT", 8, 0)
+    restockButton:SetScript("OnClick", function()
+        if WowNote_OpenRestock then
+            WowNote_OpenRestock()
+        else
+            Print("Restock module is not loaded.")
+        end
+    end)
+
+    local helpButton = MakeButton(frame, "Help", 60, 24)
+    helpButton:SetPoint("LEFT", restockButton, "RIGHT", 8, 0)
+    helpButton:SetScript("OnClick", function() WowNote_PrintHelp() end)
+
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
     statusText:SetText("Ready")
@@ -3499,12 +3533,51 @@ end
 end
 WowNote_LoadTalentModule()
 
+
+function WowNote_PrintHelp()
+    Print("WowNote commands:")
+    Print("/wn or /wownote - Toggle the main WowNote window.")
+    Print("/wn help - Show this command overview.")
+    Print("/wn new - Open WowNote and create a new empty note.")
+    Print("/wn talents - Open the talent planner.")
+    Print("/wn talents load - Load the selected note's talent build into the planner.")
+    Print("/wn raid - Open the raid planner.")
+    Print("/wn ids - Open the raid ID / lockout tracker.")
+    Print("/wn loot - Open loot tools.")
+    Print("/wn loot roll - Open auto loot roller settings.")
+    Print("/wn loot sell - Open auto sell settings.")
+    Print("/wn loot repair - Open auto repair settings.")
+    Print("/wn draw - Open the screen drawing overlay.")
+    Print("/wn tactics - Open the tactical board.")
+    Print("/wn bank - Open the account bank snapshot viewer.")
+    Print("/wn tracker - Open the item tracker configuration.")
+    Print("/wn tracker lock - Lock the movable tracker HUD.")
+    Print("/wn tracker unlock - Unlock the tracker HUD for dragging.")
+    Print("/wn tracker show - Show the tracker HUD.")
+    Print("/wn tracker hide - Hide the tracker HUD.")
+    Print("/wn restock - Open the merchant restock assistant.")
+    Print("/wn joinchan - Join the WowNote addon channel.")
+    Print("/wn chaninfo - Print addon channel status.")
+    Print("/wn chantest - Send a visible addon channel test message.")
+    Print("/wn ping <character> - Send a direct addon ping.")
+    Print("/wn pingchat <character> - Send a visible chat based ping.")
+    Print("/wn pingchan <character> - Send a channel based addon ping.")
+    Print("/wn pingroutes <character> - Test all configured communication routes.")
+    Print("/wn send <character> - Send the current note to a character.")
+    Print("/wn sendchat <character> - Send the current note through chat packets.")
+    Print("/wn sendchan <character> - Send the current note through the addon channel.")
+    Print("/wn debug on - Enable communication debug output.")
+    Print("/wn debug off - Disable communication debug output.")
+end
+
 SLASH_WOWNOTE1 = "/wownote"
 SLASH_WOWNOTE2 = "/wn"
 SlashCmdList["WOWNOTE"] = function(msg)
     local rawMsg = Trim(msg or "")
     local lowerMsg = string.lower(rawMsg)
-    if lowerMsg == "new" or lowerMsg == "neu" then
+    if lowerMsg == "help" or lowerMsg == "hilfe" or lowerMsg == "commands" or lowerMsg == "?" then
+        WowNote_PrintHelp()
+    elseif lowerMsg == "new" or lowerMsg == "neu" then
         WowNote_Open()
         ClearEditor()
     elseif lowerMsg == "talents" or lowerMsg == "talente" or lowerMsg == "talent" then
@@ -3565,6 +3638,32 @@ SlashCmdList["WOWNOTE"] = function(msg)
         SetEditMode(true)
         FocusContentEditor()
         Print("Item window was removed. Shift-click or drag items directly into the note content field.")
+    elseif lowerMsg == "bank" or lowerMsg == "banks" or lowerMsg == "bankviewer" then
+        if WowNote_OpenBankViewer then
+            WowNote_OpenBankViewer()
+        else
+            Print("Bank Viewer module is not loaded.")
+        end
+    elseif lowerMsg == "tracker" or lowerMsg == "itemtracker" or lowerMsg == "track" then
+        if WowNote_OpenItemTracker then
+            WowNote_OpenItemTracker()
+        else
+            Print("Item Tracker module is not loaded.")
+        end
+    elseif lowerMsg == "tracker lock" or lowerMsg == "track lock" then
+        if WowNote_ItemTracker_SetHudLocked then WowNote_ItemTracker_SetHudLocked(true) end
+    elseif lowerMsg == "tracker unlock" or lowerMsg == "track unlock" then
+        if WowNote_ItemTracker_SetHudLocked then WowNote_ItemTracker_SetHudLocked(false) end
+    elseif lowerMsg == "tracker show" or lowerMsg == "track show" then
+        if WowNote_ItemTracker_SetHudShown then WowNote_ItemTracker_SetHudShown(true) end
+    elseif lowerMsg == "tracker hide" or lowerMsg == "track hide" then
+        if WowNote_ItemTracker_SetHudShown then WowNote_ItemTracker_SetHudShown(false) end
+    elseif lowerMsg == "restock" or lowerMsg == "nachkaufen" then
+        if WowNote_OpenRestock then
+            WowNote_OpenRestock()
+        else
+            Print("Restock module is not loaded.")
+        end
     elseif lowerMsg == "debug" or lowerMsg == "debug on" then
         commDebug = true
         Print("Communication debug enabled.")
@@ -3627,6 +3726,10 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
     TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddCommand("Raid IDs", TITAN_ID, "WowNote_OpenRaidIdTracker")
+    TitanPanelRightClickMenu_AddCommand("Bank Viewer", TITAN_ID, "WowNote_OpenBankViewer")
+    TitanPanelRightClickMenu_AddCommand("Item Tracker", TITAN_ID, "WowNote_OpenItemTracker")
+    TitanPanelRightClickMenu_AddCommand("Restock", TITAN_ID, "WowNote_OpenRestock")
+    TitanPanelRightClickMenu_AddCommand("Help", TITAN_ID, "WowNote_PrintHelp")
     TitanPanelRightClickMenu_AddCommand("Screen Draw", TITAN_ID, "WowNote_OpenScreenDraw")
     TitanPanelRightClickMenu_AddSpacer()
     TitanPanelRightClickMenu_AddToggleIcon(TITAN_ID)
