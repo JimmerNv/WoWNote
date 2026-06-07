@@ -1,5 +1,5 @@
 local ADDON_NAME = "WowNote"
-local MODULE_VERSION = "1.9.74-raid-id-import-forwardfix"
+local MODULE_VERSION = "1.10.20"
 
 local RI = {}
 WowNoteRaidIdTracker = RI
@@ -113,11 +113,258 @@ local function GetDifficultyText(difficulty, maxPlayers, difficultyName)
     return "Raid"
 end
 
+local function ScanEncounterProgress(instanceIndex, numEncountersFromInfo, encounterProgressFromInfo)
+    local bosses = {}
+    local killed = 0
+    local total = tonumber(numEncountersFromInfo or 0) or 0
+
+    if GetSavedInstanceEncounterInfo then
+        local limit = total > 0 and total or 25
+        for encounterIndex = 1, limit do
+            local ok, bossName, _, isKilled = pcall(GetSavedInstanceEncounterInfo, instanceIndex, encounterIndex)
+            if not ok or not bossName then
+                if total <= 0 then break end
+            else
+                local boss = {
+                    name = tostring(bossName),
+                    killed = isKilled and true or false,
+                }
+                table.insert(bosses, boss)
+                if boss.killed then killed = killed + 1 end
+            end
+        end
+    end
+
+    if total <= 0 then
+        total = #bosses
+    end
+
+    local progress = tonumber(encounterProgressFromInfo or 0) or 0
+    if progress <= 0 then
+        progress = killed
+    end
+
+    return bosses, total, progress
+end
+
+local function FormatBossProgress(lock)
+    local total = tonumber(lock and lock.numEncounters or 0) or 0
+    local progress = tonumber(lock and lock.encounterProgress or 0) or 0
+    if total > 0 then
+        return tostring(progress) .. "/" .. tostring(total)
+    end
+    if lock and lock.bosses and #lock.bosses > 0 then
+        return tostring(progress) .. "/" .. tostring(#lock.bosses)
+    end
+    return "unknown"
+end
+
+local function GetKilledBossNames(lock)
+    local names = {}
+    for _, boss in ipairs((lock and lock.bosses) or {}) do
+        if boss.killed then
+            table.insert(names, boss.name or "Unknown")
+        end
+    end
+    return names
+end
+
+
+local KNOWN_RAID_BOSSES = {
+    ["lord marrowgar"] = true,
+    ["lady deathwhisper"] = true,
+    ["deathbringer saurfang"] = true,
+    ["festergut"] = true,
+    ["rotface"] = true,
+    ["professor putricide"] = true,
+    ["blood prince council"] = true,
+    ["prince valanar"] = true,
+    ["prince taldaram"] = true,
+    ["prince keleseth"] = true,
+    ["blood-queen lana'thel"] = true,
+    ["blood queen lana'thel"] = true,
+    ["valithria dreamwalker"] = true,
+    ["sindragosa"] = true,
+    ["the lich king"] = true,
+    ["gormok the impaler"] = true,
+    ["acidmaw"] = true,
+    ["dreadscale"] = true,
+    ["icehowl"] = true,
+    ["lord jaraxxus"] = true,
+    ["faction champions"] = true,
+    ["eydis darkbane"] = true,
+    ["fjola lightbane"] = true,
+    ["anub'arak"] = true,
+    ["halion"] = true,
+    ["saviana ragefire"] = true,
+    ["baltharus the warborn"] = true,
+    ["general zarithrian"] = true,
+    ["archavon the stone watcher"] = true,
+    ["emalon the storm watcher"] = true,
+    ["koralon the flame watcher"] = true,
+    ["toravon the ice watcher"] = true,
+    ["flame leviathan"] = true,
+    ["ignis the furnace master"] = true,
+    ["razorscale"] = true,
+    ["xt-002 deconstructor"] = true,
+    ["the assembly of iron"] = true,
+    ["steelbreaker"] = true,
+    ["runemaster molgeim"] = true,
+    ["stormcaller brundir"] = true,
+    ["kologarn"] = true,
+    ["auriaya"] = true,
+    ["hodir"] = true,
+    ["thorim"] = true,
+    ["freya"] = true,
+    ["mimiron"] = true,
+    ["general vezax"] = true,
+    ["yogg-saron"] = true,
+    ["algalon the observer"] = true,
+    ["anub'rekhan"] = true,
+    ["grand widow faerlina"] = true,
+    ["maexxna"] = true,
+    ["noth the plaguebringer"] = true,
+    ["heigan the unclean"] = true,
+    ["loatheb"] = true,
+    ["instructor razuvious"] = true,
+    ["gothik the harvester"] = true,
+    ["the four horsemen"] = true,
+    ["patchwerk"] = true,
+    ["grobbulus"] = true,
+    ["gluth"] = true,
+    ["thaddius"] = true,
+    ["sapphiron"] = true,
+    ["kel'thuzad"] = true,
+    ["malygos"] = true,
+    ["sartharion"] = true,
+    ["onyxia"] = true,
+}
+
+local function NormalizeBossName(name)
+    return string.lower(Trim(name or ""))
+end
+
+local function IsKnownRaidBoss(name)
+    local normalized = NormalizeBossName(name)
+    return normalized ~= "" and KNOWN_RAID_BOSSES[normalized] == true
+end
+
+local function MergeBossIntoLock(lock, bossName, killed)
+    if not lock or not bossName or bossName == "" then return false end
+    lock.bosses = lock.bosses or {}
+    local normalized = NormalizeBossName(bossName)
+    local existing
+    for _, boss in ipairs(lock.bosses) do
+        if NormalizeBossName(boss.name) == normalized then
+            existing = boss
+            break
+        end
+    end
+    if existing then
+        existing.killed = existing.killed or (killed and true or false)
+    else
+        table.insert(lock.bosses, { name = bossName, killed = killed and true or false, recordedLive = true })
+    end
+    local killedCount = 0
+    for _, boss in ipairs(lock.bosses or {}) do
+        if boss.killed then killedCount = killedCount + 1 end
+    end
+    lock.numEncounters = math.max(tonumber(lock.numEncounters or 0) or 0, #lock.bosses)
+    lock.encounterProgress = math.max(tonumber(lock.encounterProgress or 0) or 0, killedCount)
+    return true
+end
+
+local function GetCurrentRaidContext()
+    if not GetInstanceInfo then return nil end
+    local instanceName, instanceType, difficultyIndex, difficultyName, maxPlayers = GetInstanceInfo()
+    if instanceType == "raid" and instanceName and instanceName ~= "" then
+        return {
+            name = instanceName,
+            difficultyIndex = difficultyIndex,
+            difficultyName = difficultyName,
+            maxPlayers = tonumber(maxPlayers or 0) or 0,
+        }
+    end
+    return nil
+end
+
+local function GetCurrentRaidInstanceName()
+    local context = GetCurrentRaidContext()
+    return context and context.name or nil
+end
+
+local function ShouldAttachCurrentGroupToLock(lock, context)
+    if not lock or not context or not context.name then return false end
+    if tostring(lock.name or "") ~= tostring(context.name or "") then return false end
+
+    local contextMaxPlayers = tonumber(context.maxPlayers or 0) or 0
+    local lockMaxPlayers = tonumber(lock.maxPlayers or 0) or 0
+    if contextMaxPlayers > 0 and lockMaxPlayers > 0 and contextMaxPlayers ~= lockMaxPlayers then
+        return false
+    end
+
+    return true
+end
+
+local function MergeLiveBossKillsIntoLock(db, charKey, lock)
+    if not db or not charKey or not lock or not lock.name then return end
+    local byChar = db.liveBossKills and db.liveBossKills[charKey]
+    local byInstance = byChar and byChar[lock.name]
+    if not byInstance then return end
+    for bossName in pairs(byInstance) do
+        MergeBossIntoLock(lock, bossName, true)
+    end
+end
+
+local function RecordLiveBossKill(bossName)
+    bossName = Trim(bossName or "")
+    if bossName == "" or not IsKnownRaidBoss(bossName) then return false end
+    local instanceName = GetCurrentRaidInstanceName()
+    if not instanceName then return false end
+
+    local db = EnsureDB()
+    local charKey = GetPlayerKey()
+    db.liveBossKills = db.liveBossKills or {}
+    db.liveBossKills[charKey] = db.liveBossKills[charKey] or {}
+    db.liveBossKills[charKey][instanceName] = db.liveBossKills[charKey][instanceName] or {}
+    db.liveBossKills[charKey][instanceName][bossName] = time()
+
+    local entry = db.characters[charKey]
+    if entry and entry.raids then
+        for _, lock in ipairs(entry.raids) do
+            if tostring(lock.name or "") == tostring(instanceName) then
+                MergeBossIntoLock(lock, bossName, true)
+                lock.liveBossUpdatedAt = time()
+            end
+        end
+    end
+
+    if statusText then
+        statusText:SetText("Recorded boss kill: " .. bossName .. " (" .. instanceName .. ").")
+    end
+    if RI.RefreshUI then RI.RefreshUI() end
+    if RequestRaidInfo then RequestRaidInfo() end
+    ScheduleScan()
+    return true
+end
+
+local function HandleCombatLogEvent(...)
+    local timestamp, subevent, arg3, arg4, arg5, arg6, arg7, arg8 = ...
+    if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then return end
+    local destName = arg7
+    if type(destName) ~= "string" or destName == "" then
+        destName = arg8
+    end
+    if type(destName) ~= "string" or destName == "" then return end
+    RecordLiveBossKill(destName)
+end
+
 function RI.ScanCurrentCharacter()
     local db = EnsureDB()
     local charKey = GetPlayerKey()
     local now = time()
     local currentMembers = GetCurrentGroupMemberNames()
+    local currentRaidContext = GetCurrentRaidContext()
     local entry = db.characters[charKey] or {}
     local previousByKey = {}
     if entry.raids then
@@ -135,9 +382,10 @@ function RI.ScanCurrentCharacter()
 
     local count = GetNumSavedInstances and GetNumSavedInstances() or 0
     for i = 1, count do
-        local name, id, reset, difficulty, locked, extended, instanceIDMostSig, isRaid, maxPlayers, difficultyName = GetSavedInstanceInfo(i)
+        local name, id, reset, difficulty, locked, extended, instanceIDMostSig, isRaid, maxPlayers, difficultyName, numEncounters, encounterProgress = GetSavedInstanceInfo(i)
         if isRaid == true and locked == true and name then
             local resetSeconds = tonumber(reset or 0) or 0
+            local bosses, totalEncounters, killedEncounters = ScanEncounterProgress(i, numEncounters, encounterProgress)
             local lock = {
                 name = name,
                 id = id,
@@ -147,6 +395,9 @@ function RI.ScanCurrentCharacter()
                 difficultyId = difficulty,
                 maxPlayers = maxPlayers,
                 extended = extended and true or false,
+                numEncounters = totalEncounters,
+                encounterProgress = killedEncounters,
+                bosses = bosses,
                 members = {},
                 firstSeenAt = now,
                 lastSeenAt = now,
@@ -155,9 +406,19 @@ function RI.ScanCurrentCharacter()
             if old then
                 lock.firstSeenAt = old.firstSeenAt or now
                 lock.members = old.members or {}
+                if (#(lock.bosses or {}) == 0) and old.bosses then
+                    lock.bosses = old.bosses
+                    lock.numEncounters = old.numEncounters or lock.numEncounters
+                    lock.encounterProgress = old.encounterProgress or lock.encounterProgress
+                end
             end
-            for _, memberName in ipairs(currentMembers) do
-                AddUnique(lock.members, memberName)
+            MergeLiveBossKillsIntoLock(db, charKey, lock)
+            if ShouldAttachCurrentGroupToLock(lock, currentRaidContext) then
+                for _, memberName in ipairs(currentMembers) do
+                    AddUnique(lock.members, memberName)
+                end
+                lock.membersRecordedInInstance = currentRaidContext and currentRaidContext.name or lock.name
+                lock.membersUpdatedAt = now
             end
             SortNames(lock.members)
             table.insert(entry.raids, lock)
@@ -199,9 +460,14 @@ scanFrame:RegisterEvent("CHAT_MSG_CHANNEL")
 scanFrame:RegisterEvent("CHAT_MSG_WHISPER")
 scanFrame:RegisterEvent("CHAT_MSG_YELL")
 scanFrame:RegisterEvent("CHAT_MSG_SAY")
-scanFrame:SetScript("OnEvent", function(self, event, message, sender)
+scanFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+scanFrame:SetScript("OnEvent", function(self, event, ...)
     if string.find(tostring(event or ""), "^CHAT_MSG_") then
+        local message, sender = ...
         MergePostedRaidIdData(message, sender)
+        return
+    elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        HandleCombatLogEvent(...)
         return
     end
     if event == "PLAYER_ENTERING_WORLD" then
@@ -257,27 +523,31 @@ local selectedRaidIndex = nil
 
 local function CreateRaidRow(parent, index)
     local row = CreateFrame("Button", nil, parent)
-    row:SetSize(470, 22)
+    row:SetSize(585, 22)
     row.index = index
     row.bg = row:CreateTexture(nil, "BACKGROUND")
     row.bg:SetAllPoints(row)
     row.bg:SetTexture(0.10, 0.08, 0.04, 0.25)
     row:SetHighlightTexture("Interface\QuestFrame\UI-QuestTitleHighlight")
+    row:SetScript("OnMouseDown", function(self)
+        selectedRaidIndex = self.index
+        RI.RefreshUI()
+    end)
     row:SetScript("OnClick", function(self)
         selectedRaidIndex = self.index
         RI.RefreshUI()
     end)
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.name:SetPoint("LEFT", row, "LEFT", 4, 0)
-    row.name:SetWidth(210)
+    row.name:SetWidth(255)
     row.name:SetJustifyH("LEFT")
     row.diff = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.diff:SetPoint("LEFT", row.name, "RIGHT", 8, 0)
-    row.diff:SetWidth(85)
+    row.diff:SetWidth(120)
     row.diff:SetJustifyH("LEFT")
     row.id = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.id:SetPoint("LEFT", row.diff, "RIGHT", 8, 0)
-    row.id:SetWidth(80)
+    row.id:SetWidth(90)
     row.id:SetJustifyH("LEFT")
     row.reset = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.reset:SetPoint("LEFT", row.id, "RIGHT", 8, 0)
@@ -303,14 +573,58 @@ end
 
 local function BuildLockLine(charKey, lock)
     local members = lock.members and #lock.members or 0
-    return string.format("%s: %s %s ID %s, %s remaining, seen with %d player%s",
+    return string.format("%s: %s %s ID %s, progress %s, %s remaining, seen with %d player%s",
         tostring(charKey or "Character"),
         tostring(lock.name or "Unknown"),
         tostring(lock.difficulty or "Raid"),
         tostring(lock.id or "-"),
+        FormatBossProgress(lock),
         FormatMoneyLikeTime((lock.expiresAt or time()) - time()),
         members,
         members == 1 and "" or "s")
+end
+
+local function BuildMemberHeaderLine(charKey, lock)
+    local members = lock.members or {}
+    return string.format("%s: members seen with %s %s ID %s (%d):",
+        tostring(charKey or "Character"),
+        tostring(lock.name or "Unknown"),
+        tostring(lock.difficulty or "Raid"),
+        tostring(lock.id or "-"),
+        #members)
+end
+
+local function BuildMemberListLines(charKey, lock)
+    local members = {}
+    for _, member in ipairs(lock.members or {}) do
+        AddUnique(members, member)
+    end
+    SortNames(members)
+
+    local lines = { BuildMemberHeaderLine(charKey, lock) }
+    if #members == 0 then
+        table.insert(lines, "No members recorded for this ID yet.")
+        return lines
+    end
+
+    local current = ""
+    for _, member in ipairs(members) do
+        local candidate
+        if current == "" then
+            candidate = tostring(member)
+        else
+            candidate = current .. ", " .. tostring(member)
+        end
+
+        if string.len(candidate) > 210 then
+            table.insert(lines, current)
+            current = tostring(member)
+        else
+            current = candidate
+        end
+    end
+    if current ~= "" then table.insert(lines, current) end
+    return lines
 end
 
 local function EncodeField(value)
@@ -336,10 +650,16 @@ local function BuildMachineLine(charKey, lock)
     for _, member in ipairs(lock.members or {}) do
         table.insert(encodedMembers, EncodeField(member))
     end
+    local encodedBosses = {}
+    for _, boss in ipairs(lock.bosses or {}) do
+        table.insert(encodedBosses, EncodeField((boss.killed and "1" or "0") .. ":" .. tostring(boss.name or "Unknown")))
+    end
     return "WNRI:v1;id=" .. EncodeField(lock.id or "")
         .. ";name=" .. EncodeField(lock.name or "")
         .. ";diff=" .. EncodeField(lock.difficulty or "")
         .. ";char=" .. EncodeField(charKey or "")
+        .. ";progress=" .. EncodeField(FormatBossProgress(lock))
+        .. ";bosses=" .. table.concat(encodedBosses, ",")
         .. ";members=" .. table.concat(encodedMembers, ",")
 end
 
@@ -354,6 +674,15 @@ local function ParseMachineLine(message)
             if key == "members" then
                 for member in string.gmatch(value, "[^,]+") do
                     AddUnique(data.members, DecodeField(member))
+                end
+            elseif key == "bosses" then
+                data.bosses = data.bosses or {}
+                for bossValue in string.gmatch(value, "[^,]+") do
+                    local decodedBoss = DecodeField(bossValue)
+                    local killedFlag, bossName = string.match(decodedBoss, "^([01]):(.*)$")
+                    if bossName and bossName ~= "" then
+                        table.insert(data.bosses, { name = bossName, killed = killedFlag == "1" })
+                    end
                 end
             else
                 data[key] = DecodeField(value)
@@ -378,6 +707,27 @@ MergePostedRaidIdData = function(message, sender)
                     AddUnique(lock.members, member)
                 end
                 SortNames(lock.members)
+                if data.bosses and #data.bosses > 0 then
+                    lock.bosses = lock.bosses or {}
+                    local existing = {}
+                    for _, boss in ipairs(lock.bosses) do
+                        existing[string.lower(tostring(boss.name or ""))] = boss
+                    end
+                    for _, postedBoss in ipairs(data.bosses) do
+                        local key = string.lower(tostring(postedBoss.name or ""))
+                        if key ~= "" then
+                            if existing[key] then
+                                existing[key].killed = existing[key].killed or postedBoss.killed
+                            else
+                                table.insert(lock.bosses, { name = postedBoss.name, killed = postedBoss.killed and true or false })
+                            end
+                        end
+                    end
+                    local killedCount = 0
+                    for _, boss in ipairs(lock.bosses) do if boss.killed then killedCount = killedCount + 1 end end
+                    lock.numEncounters = math.max(tonumber(lock.numEncounters or 0) or 0, #lock.bosses)
+                    lock.encounterProgress = math.max(tonumber(lock.encounterProgress or 0) or 0, killedCount)
+                end
                 lock.lastImportedAt = time()
                 lock.lastImportedFrom = sender
                 merged = merged + 1
@@ -433,6 +783,31 @@ function RI.PostSelected()
     local channel = frame and frame.channelEdit and frame.channelEdit:GetText() or "/g"
     SendToChannel(BuildLockLine(selectedCharKey, lock), channel)
     SendToChannel(BuildMachineLine(selectedCharKey, lock), channel)
+end
+
+function RI.PostSelectedMembers()
+    local db = EnsureDB()
+    local entry = selectedCharKey and db.characters[selectedCharKey]
+    local lock = entry and entry.raids and entry.raids[selectedRaidIndex or 1]
+    if not lock then Print("Select a raid ID first.") return end
+    local channel = frame and frame.channelEdit and frame.channelEdit:GetText() or "/g"
+    local lines = BuildMemberListLines(selectedCharKey, lock)
+    for _, line in ipairs(lines) do
+        SendToChannel(line, channel)
+    end
+end
+
+
+function RI.ClearSelectedMembers()
+    local db = EnsureDB()
+    local entry = selectedCharKey and db.characters[selectedCharKey]
+    local lock = entry and entry.raids and entry.raids[selectedRaidIndex or 1]
+    if not lock then Print("Select a raid ID first.") return end
+    lock.members = {}
+    lock.membersUpdatedAt = nil
+    lock.membersRecordedInInstance = nil
+    Print("Cleared saved member list for " .. tostring(lock.name or "selected raid ID") .. " ID " .. tostring(lock.id or "-"))
+    if RI.RefreshUI then RI.RefreshUI() end
 end
 
 function RI.PostAll()
@@ -514,8 +889,12 @@ function RI.RefreshUI()
         if lock then
             local account = GetAlsoSavedOnAccount(db, lock)
             local members = lock.members or {}
+            local killedBosses = GetKilledBossNames(lock)
             local detailLines = {
                 "Selected ID details:",
+                "Raid: " .. tostring(lock.name or "Unknown") .. " | " .. tostring(lock.difficulty or "Raid") .. " | ID: " .. tostring(lock.id or "-"),
+                "Progress: " .. FormatBossProgress(lock),
+                "Killed bosses: " .. (#killedBosses > 0 and table.concat(killedBosses, ", ") or "none recorded"),
                 "Also saved on this account: " .. (#account > 0 and table.concat(account, ", ") or "none"),
                 "Seen with this ID/group: " .. (#members > 0 and table.concat(members, ", ") or "none recorded"),
             }
@@ -530,7 +909,7 @@ end
 local function CreateUI()
     if frame then return end
     frame = CreateFrame("Frame", "WowNoteRaidIdTrackerFrame", UIParent)
-    frame:SetSize(720, 470)
+    frame:SetSize(840, 500)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetMovable(true)
@@ -573,8 +952,16 @@ local function CreateUI()
     postSelected:SetPoint("RIGHT", refresh, "LEFT", -8, 0)
     postSelected:SetScript("OnClick", function() RI.PostSelected() end)
 
+    local postMembers = MakeButton(frame, "Post Members", 105, 24)
+    postMembers:SetPoint("RIGHT", postSelected, "LEFT", -8, 0)
+    postMembers:SetScript("OnClick", function() RI.PostSelectedMembers() end)
+
+    local clearMembers = MakeButton(frame, "Clear Members", 105, 24)
+    clearMembers:SetPoint("RIGHT", postMembers, "LEFT", -8, 0)
+    clearMembers:SetScript("OnClick", function() RI.ClearSelectedMembers() end)
+
     local postAll = MakeButton(frame, "Post All", 75, 24)
-    postAll:SetPoint("RIGHT", postSelected, "LEFT", -8, 0)
+    postAll:SetPoint("RIGHT", clearMembers, "LEFT", -8, 0)
     postAll:SetScript("OnClick", function() RI.PostAll() end)
 
     frame.channelEdit = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
@@ -594,9 +981,21 @@ local function CreateUI()
         frame.charButtons[i] = b
     end
 
-    local header = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    header:SetPoint("TOPLEFT", frame, "TOPLEFT", 240, -112)
-    header:SetText("Raid                         Size/Mode       ID                 Remaining")
+    local headerRaid = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerRaid:SetPoint("TOPLEFT", frame, "TOPLEFT", 240, -112)
+    headerRaid:SetText("Raid")
+
+    local headerMode = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerMode:SetPoint("TOPLEFT", frame, "TOPLEFT", 500, -112)
+    headerMode:SetText("Size/Mode")
+
+    local headerId = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerId:SetPoint("TOPLEFT", frame, "TOPLEFT", 628, -112)
+    headerId:SetText("ID")
+
+    local headerRemaining = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerRemaining:SetPoint("TOPLEFT", frame, "TOPLEFT", 724, -112)
+    headerRemaining:SetText("Remaining")
 
     frame.raidRows = {}
     for i = 1, 16 do
@@ -610,9 +1009,9 @@ local function CreateUI()
     frame.emptyText:SetText("No saved raid IDs for this character.")
 
     frame.detailsText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.detailsText:SetPoint("TOPLEFT", frame, "TOPLEFT", 240, -370)
-    frame.detailsText:SetWidth(455)
-    frame.detailsText:SetHeight(60)
+    frame.detailsText:SetPoint("TOPLEFT", frame, "TOPLEFT", 240, -388)
+    frame.detailsText:SetWidth(570)
+    frame.detailsText:SetHeight(80)
     frame.detailsText:SetJustifyH("LEFT")
     frame.detailsText:SetJustifyV("TOP")
     frame.detailsText:SetText("Select a raid ID to see saved-with details.")

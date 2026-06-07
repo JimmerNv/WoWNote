@@ -2,7 +2,7 @@
 ## Title: Titan Panel [|cffeda55fWowNote|r]
 ## Notes: Account-wide Markdown notes with GUI, GUIDs, item links, talent planner and raid LFM planner for WoW 3.3.5a
 ## Author: Johannes / ChatGPT
-## Version: 1.9.74-raid-id-import-forwardfix
+## Version: 1.10.20
 ## SavedVariables: WowNoteDB
 ## SavedVariablesPerCharacter: WowNoteCharDB
 ## OptionalDeps: Titan
@@ -19,3 +19,6 @@ WowNote_AutoSellQuickAdd.lua
 WowNote_LootTools.lua
 
 WowNote_RaidIdTracker.lua
+WowNote_ScreenDraw.lua
+WowNote_TacticalMap.lua
+WowNote_HudDraw.lua

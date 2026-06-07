@@ -1888,7 +1888,7 @@ CreateUI = function()
 
     frame = CreateFrame("Frame", "WowNoteFrame", UIParent)
     frame:SetWidth(760)
-    frame:SetHeight(500)
+    frame:SetHeight(540)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     if frame.SetToplevel then frame:SetToplevel(true) end
@@ -1922,7 +1922,7 @@ CreateUI = function()
     local leftBg = CreateFrame("Frame", nil, frame)
     leftBg:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -70)
     leftBg:SetWidth(220)
-    leftBg:SetHeight(383)
+    leftBg:SetHeight(423)
     leftBg:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1941,7 +1941,7 @@ CreateUI = function()
 
     listFrame = CreateFrame("Frame", nil, listScroll)
     listFrame:SetWidth(185)
-    listFrame:SetHeight(360)
+    listFrame:SetHeight(400)
     listFrame:EnableMouse(true)
     listFrame:SetFrameLevel(listScroll:GetFrameLevel() + 1)
     listScroll:SetScrollChild(listFrame)
@@ -2092,24 +2092,67 @@ CreateUI = function()
     importButton:SetPoint("LEFT", exportButton, "RIGHT", 8, 0)
     importButton:SetScript("OnClick", function() WowNote_OpenImportNoteDialog() end)
 
-    statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
-    statusText:SetText("Ready")
-
-    local raidPlannerBottomButton = MakeButton(frame, "Raid Planner", 105, 24)
-    raidPlannerBottomButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 14)
-    raidPlannerBottomButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
-
-    local autoLootBottomButton = MakeButton(frame, "Loot Tools", 105, 24)
-    autoLootBottomButton:SetPoint("RIGHT", raidPlannerBottomButton, "LEFT", -8, 0)
-    autoLootBottomButton:SetScript("OnEnter", function(self)
+    local drawButton = MakeButton(frame, "Draw", 70, 24)
+    drawButton:SetPoint("LEFT", importButton, "RIGHT", 8, 0)
+    drawButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Loot Tools", 1, 0.82, 0)
-        GameTooltip:AddLine("Open the automatic Greed/Disenchant roll settings.", 1, 1, 1, true)
+        GameTooltip:SetText("Screen Draw", 1, 0.82, 0)
+        GameTooltip:AddLine("Open the screen drawing overlay for raid explanations.", 1, 1, 1, true)
         GameTooltip:Show()
     end)
-    autoLootBottomButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    autoLootBottomButton:SetScript("OnClick", function()
+    drawButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    drawButton:SetScript("OnClick", function()
+        if WowNote_OpenScreenDraw then
+            WowNote_OpenScreenDraw()
+        else
+            Print("Screen Draw module is not loaded.")
+        end
+    end)
+
+    local tacticsButton = MakeButton(frame, "Tactics", 78, 24)
+    tacticsButton:SetPoint("LEFT", drawButton, "RIGHT", 8, 0)
+    tacticsButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Tactical Board", 1, 0.82, 0)
+        GameTooltip:AddLine("Open a shareable tactical drawing board for boss planning.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    tacticsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    tacticsButton:SetScript("OnClick", function()
+        if WowNote_OpenTacticalMap then
+            WowNote_OpenTacticalMap()
+        else
+            Print("Tactical Map module is not loaded.")
+        end
+    end)
+
+    local raidIdsButton = MakeButton(frame, "Raid IDs", 90, 24)
+    raidIdsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 256, -480)
+    raidIdsButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Raid ID Tracker", 1, 0.82, 0)
+        GameTooltip:AddLine("Show saved raid lockouts for all characters on this account.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    raidIdsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    raidIdsButton:SetScript("OnClick", function()
+        if WowNote_OpenRaidIdTracker then
+            WowNote_OpenRaidIdTracker()
+        else
+            Print("Raid ID Tracker module is not loaded.")
+        end
+    end)
+
+    local lootToolsButton = MakeButton(frame, "Loot Tools", 105, 24)
+    lootToolsButton:SetPoint("LEFT", raidIdsButton, "RIGHT", 8, 0)
+    lootToolsButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Loot Tools", 1, 0.82, 0)
+        GameTooltip:AddLine("Open Auto Roll, Auto Sell, and Auto Repair settings.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    lootToolsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    lootToolsButton:SetScript("OnClick", function()
         if WowNote_OpenAutoLootRoller then
             WowNote_OpenAutoLootRoller()
         else
@@ -2117,22 +2160,13 @@ CreateUI = function()
         end
     end)
 
-    local raidIdsBottomButton = MakeButton(frame, "Raid IDs", 90, 24)
-    raidIdsBottomButton:SetPoint("RIGHT", autoLootBottomButton, "LEFT", -8, 0)
-    raidIdsBottomButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Raid ID Tracker", 1, 0.82, 0)
-        GameTooltip:AddLine("Show saved raid lockouts for all characters on this account.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    raidIdsBottomButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    raidIdsBottomButton:SetScript("OnClick", function()
-        if WowNote_OpenRaidIdTracker then
-            WowNote_OpenRaidIdTracker()
-        else
-            Print("Raid ID Tracker module is not loaded.")
-        end
-    end)
+    local raidPlannerButton = MakeButton(frame, "Raid Planner", 105, 24)
+    raidPlannerButton:SetPoint("LEFT", lootToolsButton, "RIGHT", 8, 0)
+    raidPlannerButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
+
+    statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
+    statusText:SetText("Ready")
 
     frame:SetScript("OnShow", function()
         InitDB()
@@ -3511,6 +3545,18 @@ SlashCmdList["WOWNOTE"] = function(msg)
         else
             Print("Raid ID Tracker module is not loaded.")
         end
+    elseif lowerMsg == "draw" or lowerMsg == "screen" or lowerMsg == "screendraw" or lowerMsg == "paint" then
+        if WowNote_OpenScreenDraw then
+            WowNote_OpenScreenDraw()
+        else
+            Print("Screen Draw module is not loaded.")
+        end
+    elseif lowerMsg == "tactics" or lowerMsg == "tactic" or lowerMsg == "mapdraw" or lowerMsg == "board" then
+        if WowNote_OpenTacticalMap then
+            WowNote_OpenTacticalMap()
+        else
+            Print("Tactical Map module is not loaded.")
+        end
     elseif lowerMsg == "talents load" or lowerMsg == "talent load" or lowerMsg == "load talents" then
         WowNote_OpenTalents()
         LoadTalentPlanFromCurrentNote()
@@ -3581,6 +3627,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
     TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddCommand("Raid IDs", TITAN_ID, "WowNote_OpenRaidIdTracker")
+    TitanPanelRightClickMenu_AddCommand("Screen Draw", TITAN_ID, "WowNote_OpenScreenDraw")
     TitanPanelRightClickMenu_AddSpacer()
     TitanPanelRightClickMenu_AddToggleIcon(TITAN_ID)
     TitanPanelRightClickMenu_AddToggleLabelText(TITAN_ID)
@@ -3597,7 +3644,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.9.41-raidplanner",
+        version = "1.10.20",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",
