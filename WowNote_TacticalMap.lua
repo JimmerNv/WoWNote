@@ -502,42 +502,52 @@ local function LoadPresetByName(name)
 end
 
 local function RefreshPresetList()
-    if not presetContentFrame then return end
+    if not frame then return end
     local names = GetPresetNames()
-    local rowHeight = 18
-    local contentHeight = math.max(1, #names * rowHeight)
-    presetContentFrame:SetHeight(contentHeight)
-    for i, name in ipairs(names) do
+    local rowHeight = 22
+    local listX = 660
+    local listY = -170
+    local maxRows = 16
+
+    for i = 1, maxRows do
         local row = presetRows[i]
         if not row then
-            row = CreateFrame("Button", nil, presetContentFrame)
-            row:SetHeight(rowHeight)
-            row:SetWidth(196)
+            row = CreateFrame("Button", nil, frame)
+            row:SetSize(210, 20)
+            row:EnableMouse(true)
+            row:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
             row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
             row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
             row.text:SetPoint("LEFT", 4, 0)
             row.text:SetJustifyH("LEFT")
-            row.text:SetWidth(188)
-            row:SetScript("OnClick", function(self)
+            row.text:SetWidth(202)
+            local function SelectPreset(self)
                 selectedPresetName = self.name
                 if nameEdit then nameEdit:SetText(self.name or "") end
                 RefreshPresetList()
-            end)
+            end
+            row:SetScript("OnMouseDown", SelectPreset)
+            row:SetScript("OnClick", SelectPreset)
             presetRows[i] = row
         end
-        row.name = name
+        row:SetFrameLevel((frame:GetFrameLevel() or 0) + 260)
+        row.text:SetDrawLayer("OVERLAY", 7)
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", 0, -((i - 1) * rowHeight))
-        row.text:SetText(name)
-        if selectedPresetName == name then
-            row.text:SetTextColor(1, 0.82, 0)
+        row:SetPoint("TOPLEFT", frame, "TOPLEFT", listX, listY - ((i - 1) * rowHeight))
+        local name = names[i]
+        if name then
+            row.name = name
+            row.text:SetText(name)
+            if selectedPresetName == name then
+                row.text:SetTextColor(1, 0.82, 0)
+            else
+                row.text:SetTextColor(1, 1, 1)
+            end
+            row:Show()
         else
-            row.text:SetTextColor(1, 1, 1)
+            row.name = nil
+            row:Hide()
         end
-        row:Show()
-    end
-    for i = #names + 1, #presetRows do
-        presetRows[i]:Hide()
     end
 end
 
@@ -768,16 +778,22 @@ local function CreateUI()
     local presetLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     presetLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 660, -150)
     presetLabel:SetText("Saved Drawings:")
+    presetLabel:SetDrawLayer("OVERLAY", 7)
 
-    presetScrollFrame = CreateFrame("ScrollFrame", "WowNoteTacticalPresetScroll", frame, "UIPanelScrollFrameTemplate")
-    presetScrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 660, -170)
-    presetScrollFrame:SetSize(220, 410)
-    LiftControl(presetScrollFrame, frame, 42)
-
-    presetContentFrame = CreateFrame("Frame", nil, presetScrollFrame)
-    presetContentFrame:SetWidth(200)
-    presetContentFrame:SetHeight(1)
-    presetScrollFrame:SetScrollChild(presetContentFrame)
+    presetScrollFrame = CreateFrame("Frame", nil, frame)
+    presetScrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 656, -166)
+    presetScrollFrame:SetSize(224, 370)
+    presetScrollFrame:SetFrameLevel((frame:GetFrameLevel() or 0) + 120)
+    presetScrollFrame:EnableMouse(false)
+    presetScrollFrame.bg = presetScrollFrame:CreateTexture(nil, "BACKGROUND")
+    presetScrollFrame.bg:SetAllPoints(presetScrollFrame)
+    presetScrollFrame.bg:SetTexture(0, 0, 0, 0.35)
+    presetScrollFrame.border = CreateFrame("Frame", nil, presetScrollFrame)
+    presetScrollFrame.border:SetAllPoints(presetScrollFrame)
+    presetScrollFrame.border:EnableMouse(false)
+    presetScrollFrame.border:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 10, insets = { left = 2, right = 2, top = 2, bottom = 2 } })
+    presetScrollFrame.border:SetBackdropBorderColor(0.45, 0.45, 0.45, 1)
+    presetContentFrame = nil
 
     local listLoadBtn = MakeButton(frame, "Load Sel", 72, 22)
     listLoadBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 660, -590)

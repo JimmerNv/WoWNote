@@ -1,5 +1,5 @@
 local ADDON_NAME = "WowNote"
-local MODULE_VERSION = "1.10.20"
+local MODULE_VERSION = "1.10.22"
 
 local RI = {}
 WowNoteRaidIdTracker = RI

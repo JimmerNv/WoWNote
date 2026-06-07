@@ -3644,7 +3644,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.10.20",
+        version = "1.10.22",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",
