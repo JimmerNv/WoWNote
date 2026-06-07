@@ -19,15 +19,28 @@ jobs:
       - name: Create installable addon ZIP
         run: |
           mkdir -p build/WowNote
-          cp WowNote.lua build/WowNote/
+
           cp WowNote.toc build/WowNote/
+          cp *.lua build/WowNote/
+
+          echo "Files included in addon folder:"
+          ls -la build/WowNote
+
           cd build
           zip -r "WowNote-${GITHUB_REF_NAME}.zip" WowNote
 
-      - name: Create GitHub Release and upload ZIP
-        uses: softprops/action-gh-release@v3
-        with:
-          files: build/WowNote-${{ github.ref_name }}.zip
-          generate_release_notes: true
+          echo "ZIP contents:"
+          unzip -l "WowNote-${GITHUB_REF_NAME}.zip"
+
+      - name: Create or update GitHub Release
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+          gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes "Release ${GITHUB_REF_NAME}"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload ZIP to GitHub Release
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" "build/WowNote-${GITHUB_REF_NAME}.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

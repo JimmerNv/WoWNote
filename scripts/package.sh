@@ -10,10 +10,14 @@ rm -rf "$BUILD_DIR" "$ZIP_FILE"
 mkdir -p "$BUILD_DIR"
 
 cp "$ROOT_DIR/WowNote.toc" "$BUILD_DIR/WowNote.toc"
-cp "$ROOT_DIR/WowNote.lua" "$BUILD_DIR/WowNote.lua"
-cp "$ROOT_DIR/README.md" "$BUILD_DIR/README.md"
-cp "$ROOT_DIR/CHANGELOG.md" "$BUILD_DIR/CHANGELOG.md"
-cp "$ROOT_DIR/LICENSE.md" "$BUILD_DIR/LICENSE.md"
+
+# Copy all addon Lua modules.
+cp "$ROOT_DIR"/*.lua "$BUILD_DIR/"
+
+# Optional project files inside the ZIP.
+[ -f "$ROOT_DIR/README.md" ] && cp "$ROOT_DIR/README.md" "$BUILD_DIR/README.md"
+[ -f "$ROOT_DIR/CHANGELOG.md" ] && cp "$ROOT_DIR/CHANGELOG.md" "$BUILD_DIR/CHANGELOG.md"
+[ -f "$ROOT_DIR/LICENSE.md" ] && cp "$ROOT_DIR/LICENSE.md" "$BUILD_DIR/LICENSE.md"
 
 (
   cd "$DIST_DIR"
@@ -21,3 +25,5 @@ cp "$ROOT_DIR/LICENSE.md" "$BUILD_DIR/LICENSE.md"
 )
 
 echo "Created $ZIP_FILE"
+echo "ZIP contents:"
+unzip -l "$ZIP_FILE"
