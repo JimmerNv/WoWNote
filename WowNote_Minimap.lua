@@ -110,3 +110,14 @@ function WowNote_HideMinimapButton()
     WowNoteDB.minimap.hide = true
     if minimapButton then minimapButton:Hide() end
 end
+
+
+function WowNote_ApplyMinimapButtonVisibility()
+    WowNote_Internal.InitDB()
+    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if WowNoteDB.minimap.hide then
+        WowNote_HideMinimapButton()
+    else
+        WowNote_ShowMinimapButton()
+    end
+end

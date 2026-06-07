@@ -23,9 +23,17 @@ local itemButtons = {}
 local currentItemGuid = nil
 local shareFrame
 local shareTargetEdit
+local shareAuthEdit
+local shareReceiveButton
+local shareReceiveCodeText
+local shareReceiveStatusText
 local shareStatusText
+local dataReceiveEnabled = false
+local dataReceiveCode = nil
 local incomingTransfers = {}
 local pendingIncomingNotes = {}
+local pendingIncomingTransferRequests = {}
+local approvedIncomingTransfers = {}
 local titleEdit
 local contentEdit
 local contentScroll
@@ -77,6 +85,83 @@ local function Trim(text)
     text = string.gsub(text, "^%s+", "")
     text = string.gsub(text, "%s+$", "")
     return text
+end
+
+local function SetShareStatus(message)
+    if shareStatusText then
+        shareStatusText:SetText(tostring(message or ""))
+    end
+end
+
+local function BuildReceiveCode()
+    if not randomSeeded then
+        randomSeeded = true
+        local seed = time and time() or 1
+        if GetTime and math and math.floor then
+            seed = seed + math.floor(GetTime() * 100000)
+        end
+        if math and math.randomseed then
+            math.randomseed(seed)
+        elseif randomseed then
+            randomseed(seed)
+        end
+    end
+    local value
+    if math and math.random then
+        value = math.random(1000, 9999)
+    elseif random then
+        value = random(1000, 9999)
+    else
+        value = 1000
+    end
+    value = tonumber(value) or 1000
+    if value < 1000 then value = value + 1000 end
+    if value > 9999 then value = 9999 end
+    return string.format("%04d", value)
+end
+
+local function RefreshReceiveStatus()
+    if shareReceiveButton then
+        shareReceiveButton:SetText(dataReceiveEnabled and "Receive: ON" or "Receive: OFF")
+    end
+    if shareReceiveCodeText then
+        if dataReceiveEnabled and dataReceiveCode then
+            shareReceiveCodeText:SetText("Receive code: " .. tostring(dataReceiveCode))
+        else
+            shareReceiveCodeText:SetText("Receive code: disabled")
+        end
+    end
+    if shareReceiveStatusText then
+        if dataReceiveEnabled then
+            shareReceiveStatusText:SetText("Only transfers with this code are accepted while this window stays open.")
+        else
+            shareReceiveStatusText:SetText("Receiving is blocked. Enable it before someone sends data.")
+        end
+    end
+end
+
+local function SetDataReceiveEnabled(enabled)
+    dataReceiveEnabled = enabled and true or false
+    if dataReceiveEnabled and (not dataReceiveCode or dataReceiveCode == "") then
+        dataReceiveCode = BuildReceiveCode()
+    end
+    RefreshReceiveStatus()
+end
+
+local function IsDataReceiveAllowed(authCode)
+    if not shareFrame or not shareFrame:IsShown() or not dataReceiveEnabled then
+        return false, "receive-disabled"
+    end
+    authCode = Trim(authCode or "")
+    if not dataReceiveCode or dataReceiveCode == "" or authCode ~= tostring(dataReceiveCode) then
+        return false, "bad-code"
+    end
+    return true, nil
+end
+
+local function IsValidReceiverCode(authCode)
+    authCode = Trim(authCode or "")
+    return string.match(authCode, "^%d%d%d%d$") ~= nil
 end
 
 local function ShowHyperlinkTooltip(owner, linkData)
@@ -709,7 +794,7 @@ RefreshList = function()
 end
 
 
-local COMM_PREFIX = "WowNote"
+local COMM_PREFIX = "WNOTE"
 local COMM_VERSION = "WN1"
 local CHAT_COMM_MARKER = "WN1:"
 local LEGACY_CHAT_COMM_MARKER = "<WN1>"
@@ -717,6 +802,7 @@ local COMM_CHANNEL_NAME = "WowNoteShare"
 local commChannelNumber = nil
 local COMM_CHUNK_SIZE = 180
 local sentTransfers = {}
+local commMaintenanceFrame = nil
 local commDebug = false
 local BuildTransferId
 
@@ -935,6 +1021,86 @@ local function SendShareAck(target, transferId, state, returnMode)
     else
         SendAddonWhisper(target, payload)
     end
+end
+
+local function BuildMissingPacketList(transfer)
+    local missing = {}
+    if not transfer or not transfer.total then return missing, 0 end
+    local i
+    for i = 1, transfer.total do
+        if not transfer.chunks or transfer.chunks[i] == nil then
+            table.insert(missing, i)
+        end
+    end
+    return missing, table.getn(missing)
+end
+
+local function PacketListToText(list)
+    local parts = {}
+    local i
+    for i = 1, table.getn(list or {}) do
+        table.insert(parts, tostring(list[i]))
+    end
+    return table.concat(parts, ",")
+end
+
+local function ParsePacketList(text, total)
+    local list = {}
+    local seen = {}
+    total = tonumber(total or 0) or 0
+    for numberText in string.gmatch(tostring(text or ""), "([^,]+)") do
+        local index = tonumber(Trim(numberText or "")) or 0
+        if index > 0 and (total <= 0 or index <= total) and not seen[index] then
+            seen[index] = true
+            table.insert(list, index)
+        end
+    end
+    return list
+end
+
+local function SendShareMissing(target, transferId, missingList, returnMode)
+    local text = PacketListToText(missingList or {})
+    if text == "" then return false end
+    SendShareAck(target, transferId, "missing:" .. text, returnMode)
+    return true
+end
+
+local function RequestMissingPackets(sender, transfer, reason)
+    if not sender or not transfer then return false end
+    local missing, missingCount = BuildMissingPacketList(transfer)
+    if missingCount <= 0 then return false end
+    transfer.lastMissingRequest = time and time() or 0
+    SendShareMissing(sender, transfer.id, missing, transfer.returnMode)
+    if shareReceiveStatusText then
+        shareReceiveStatusText:SetText("Missing " .. tostring(missingCount) .. " packet(s): " .. PacketListToText(missing) .. ". Waiting for resend...")
+    end
+    if reason and reason ~= "" then
+        Print("WowNote transfer " .. tostring(transfer.id or "?") .. " is incomplete (" .. tostring(transfer.count or 0) .. "/" .. tostring(transfer.total or 0) .. "). Requesting missing packet(s): " .. PacketListToText(missing) .. ".")
+    end
+    return true
+end
+
+local function EnsureCommMaintenanceFrame()
+    if commMaintenanceFrame or not CreateFrame then return end
+    commMaintenanceFrame = CreateFrame("Frame")
+    commMaintenanceFrame.elapsed = 0
+    commMaintenanceFrame:SetScript("OnUpdate", function(self, elapsed)
+        self.elapsed = (self.elapsed or 0) + (elapsed or 0)
+        if self.elapsed < 1.0 then return end
+        self.elapsed = 0
+
+        local now = time and time() or 0
+        local id, transfer
+        for id, transfer in pairs(incomingTransfers) do
+            if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
+                local lastPacket = transfer.lastPacketAt or transfer.started or now
+                local lastMissing = transfer.lastMissingRequest or 0
+                if now - lastPacket >= 4 and now - lastMissing >= 4 then
+                    RequestMissingPackets(transfer.sender, transfer, "timeout")
+                end
+            end
+        end
+    end)
 end
 
 local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -1342,7 +1508,88 @@ local function SplitPayload(payload)
     return chunks
 end
 
-SendCurrentNoteToPlayer = function(target)
+local function SendTransferPacket(transfer, payload)
+    if not transfer then return false end
+    local mode = transfer.returnMode or "WHISPER"
+    if mode == "CHATWHISPER" then
+        return SendChatWhisper(transfer.target, payload)
+    elseif mode == "CHANNEL" then
+        return SendChatChannel(transfer.target, payload)
+    elseif mode == "PARTY" or mode == "RAID" or mode == "GUILD" or mode == "BATTLEGROUND" then
+        return SendAddonChannel(mode, payload)
+    end
+    return SendAddonWhisper(transfer.target, payload)
+end
+
+local function SendSelectedTransferPackets(transferId, indices, label)
+    local transfer = sentTransfers[transferId]
+    if not transfer or not transfer.chunks then return false end
+
+    local ok = true
+    local sent = 0
+    local i
+    for i = 1, table.getn(indices or {}) do
+        local index = tonumber(indices[i] or 0) or 0
+        if index > 0 and index <= (transfer.total or 0) then
+            sent = sent + 1
+            if not SendTransferPacket(transfer, COMM_VERSION .. "|C|" .. transferId .. "|" .. tostring(index) .. "|" .. tostring(transfer.chunks[index] or "")) then
+                ok = false
+            end
+        end
+    end
+    if not SendTransferPacket(transfer, COMM_VERSION .. "|E|" .. transferId) then
+        ok = false
+    end
+
+    if shareStatusText then
+        shareStatusText:SetText("Resent " .. tostring(sent) .. " missing packet(s). Waiting for receiver save...")
+    end
+    if ok then
+        Print("Resent " .. tostring(sent) .. " missing WowNote packet(s) to " .. tostring(transfer.target or "?") .. ".")
+    else
+        Print("Tried to resend " .. tostring(sent) .. " missing WowNote packet(s), but at least one send call failed.")
+    end
+    return ok
+end
+
+local function SendPreparedTransfer(transferId)
+    local transfer = sentTransfers[transferId]
+    if not transfer or not transfer.chunks then return false end
+
+    local ok = SendTransferPacket(transfer, COMM_VERSION .. "|B|" .. transferId .. "|" .. tostring(transfer.total or 0))
+    local indices = {}
+    local i
+    for i = 1, transfer.total do
+        table.insert(indices, i)
+    end
+    if not SendSelectedTransferPackets(transferId, indices, "full") then
+        ok = false
+    end
+
+    transfer.sentChunks = true
+    if shareStatusText then
+        shareStatusText:SetText("Receiver accepted. Sent " .. tostring(transfer.total or 0) .. " packets. Waiting for final response...")
+    end
+
+    if ok then
+        Print("Receiver accepted the transfer. Sent " .. tostring(transfer.total or 0) .. " WowNote packets to " .. tostring(transfer.target or "?") .. ".")
+    else
+        Print("Receiver accepted, but not all WowNote packets could be sent to " .. tostring(transfer.target or "?") .. ".")
+    end
+    return ok
+end
+
+local function FindOpenSentTransfer(target, noteGuid)
+    local id, transfer
+    for id, transfer in pairs(sentTransfers) do
+        if transfer and transfer.target == target and transfer.noteGuid == noteGuid and transfer.chunks then
+            return id, transfer
+        end
+    end
+    return nil, nil
+end
+
+SendCurrentNoteToPlayer = function(target, authCodeOverride)
     InitDB()
     target = Trim(target or "")
     local normalizedTarget, strippedRealm = NormalizeShareTarget(target)
@@ -1367,41 +1614,147 @@ SendCurrentNoteToPlayer = function(target)
         return
     end
 
+    local authCode = Trim(authCodeOverride or "")
+    if authCode == "" and shareAuthEdit then
+        authCode = Trim(shareAuthEdit:GetText() or "")
+    end
+    if not IsValidReceiverCode(authCode) then
+        Print("Enter the 4-digit receiver code before sending. The receiver must enable receiving in the Share window and give you the code.")
+        SetShareStatus("Missing or invalid receiver code. Enter the 4-digit code before sending.")
+        if shareAuthEdit then
+            shareAuthEdit:SetFocus()
+            shareAuthEdit:HighlightText()
+        end
+        return
+    end
+
     local note = WowNoteDB.notes[currentGuid]
     local serialized = SerializeNote(note)
     local compressed = CompressText(serialized)
     local payload = "B64:" .. Base64Encode(compressed)
     local chunks = SplitPayload(payload)
-    local transferId = BuildTransferId()
+    local transferId, existingTransfer = FindOpenSentTransfer(target, currentGuid)
     local total = table.getn(chunks)
-
-    local ok = SendAddonWhisper(target, COMM_VERSION .. "|B|" .. transferId .. "|" .. tostring(total))
-    for i = 1, total do
-        if not SendAddonWhisper(target, COMM_VERSION .. "|C|" .. transferId .. "|" .. tostring(i) .. "|" .. chunks[i]) then
-            ok = false
+    if transferId and existingTransfer then
+        existingTransfer.started = time()
+        existingTransfer.authCode = authCode
+        existingTransfer.returnMode = existingTransfer.returnMode or "WHISPER"
+        existingTransfer.retryRequest = true
+        if shareStatusText then
+            shareStatusText:SetText("Retrying existing transfer. Receiver will request only missing packets if it still has partial data...")
         end
-    end
-    if not SendAddonWhisper(target, COMM_VERSION .. "|E|" .. transferId) then
-        ok = false
+    else
+        transferId = BuildTransferId()
+        sentTransfers[transferId] = {
+            target = target,
+            noteGuid = currentGuid,
+            total = total,
+            started = time(),
+            title = note.title or "Untitled",
+            chunks = chunks,
+            authCode = authCode,
+            returnMode = "WHISPER",
+        }
     end
 
-    sentTransfers[transferId] = {
-        target = target,
-        total = total,
-        started = time(),
-        title = note.title or "Untitled",
-    }
+    local requestPayload = COMM_VERSION .. "|M|" .. transferId .. "|" .. tostring(total) .. "|" .. tostring(string.len(payload or "")) .. "|" .. PercentEncode(authCode) .. "|" .. PercentEncode(note.title or "Untitled")
+    local okAddon = SendAddonWhisper(target, requestPayload)
+    local okChat = SendChatWhisper(target, requestPayload)
+    local ok = okAddon or okChat
 
     WowNoteDB.share.sent = (WowNoteDB.share.sent or 0) + 1
     if shareStatusText then
-        shareStatusText:SetText("Sent to " .. target .. " (" .. tostring(total) .. " packets). Waiting for receiver...")
+        shareStatusText:SetText("Transfer request sent to " .. target .. ". Waiting for receiver code check/accept...")
     end
 
     if ok then
-        Print("Note transfer sent to " .. target .. " (" .. tostring(total) .. " packets). Waiting for receiver response.")
+        Print("WowNote transfer request sent to " .. target .. " via addon whisper and chat fallback. Waiting for receiver code check before sending " .. tostring(total) .. " packets.")
     else
-        Print("Could not send all WowNote packets to " .. target .. ". Check the player name and that the target is online.")
+        sentTransfers[transferId] = nil
+        Print("Could not send the WowNote transfer request to " .. target .. ". Check the player name and that the target is online.")
     end
+end
+
+function WowNote_SendDataItemToPlayer(target, authCodeOverride, dataItem)
+    InitDB()
+    target = Trim(target or "")
+    local normalizedTarget, strippedRealm = NormalizeShareTarget(target)
+    target = normalizedTarget
+
+    if target == "" then
+        Print("No recipient specified.")
+        return false
+    end
+
+    if strippedRealm then
+        Print("WotLK 3.3.5a uses local character names for addon whispers. Sending to " .. target .. ".")
+    end
+
+    if not SendAddonMessage then
+        Print("AddOn communication is not available in this client.")
+        return false
+    end
+
+    local authCode = Trim(authCodeOverride or "")
+    if authCode == "" and shareAuthEdit then
+        authCode = Trim(shareAuthEdit:GetText() or "")
+    end
+    if not IsValidReceiverCode(authCode) then
+        Print("Enter the 4-digit receiver code before sending. The receiver must enable receiving in the Share window and give you the code.")
+        SetShareStatus("Missing or invalid receiver code. Enter the 4-digit code before sending.")
+        if shareAuthEdit then
+            shareAuthEdit:SetFocus()
+            shareAuthEdit:HighlightText()
+        end
+        return false
+    end
+
+    if type(dataItem) ~= "table" or not WowNote_BuildTransferPayloadForDataItem then
+        Print("No transferable WowNote data selected.")
+        return false
+    end
+
+    local payload, originalSize, compressedSize = WowNote_BuildTransferPayloadForDataItem(dataItem)
+    if not payload or payload == "" then
+        Print("Could not encode selected WowNote data.")
+        return false
+    end
+
+    local chunks = SplitPayload(payload)
+    local transferId = BuildTransferId()
+    local total = table.getn(chunks)
+    local title = dataItem.title or dataItem.key or dataItem.type or "WowNote data"
+    sentTransfers[transferId] = {
+        target = target,
+        noteGuid = tostring(dataItem.type or "data") .. ":" .. tostring(dataItem.key or title),
+        total = total,
+        started = time(),
+        title = title,
+        dataType = dataItem.type or "data",
+        chunks = chunks,
+        authCode = authCode,
+        returnMode = "WHISPER",
+    }
+
+    local requestTitle = tostring(title or "WowNote data")
+    local requestPayload = COMM_VERSION .. "|M|" .. transferId .. "|" .. tostring(total) .. "|" .. tostring(string.len(payload or "")) .. "|" .. PercentEncode(authCode) .. "|" .. PercentEncode(requestTitle)
+    local okAddon = SendAddonWhisper(target, requestPayload)
+    local okChat = SendChatWhisper(target, requestPayload)
+    local ok = okAddon or okChat
+
+    WowNoteDB.share.sent = (WowNoteDB.share.sent or 0) + 1
+    if shareStatusText then
+        shareStatusText:SetText("Transfer request sent to " .. target .. ": " .. requestTitle .. ". Waiting for receiver accept...")
+    end
+
+    if ok then
+        Print("WowNote data transfer request sent to " .. target .. ": " .. requestTitle .. " (" .. tostring(total) .. " packets).")
+        return true
+    end
+
+    sentTransfers[transferId] = nil
+    Print("Could not send the WowNote transfer request to " .. target .. ". Check the player name and that the target is online.")
+    return false
 end
 
 local function SendCurrentNoteToPlayerViaChat(target)
@@ -1449,9 +1802,11 @@ local function SendCurrentNoteToPlayerViaChat(target)
 
     sentTransfers[transferId] = {
         target = target,
+        noteGuid = currentGuid,
         total = total,
         started = time(),
         title = note.title or "Untitled",
+        chunks = chunks,
         returnMode = "CHATWHISPER",
     }
 
@@ -1531,7 +1886,7 @@ local function SendCurrentNoteToPlayerViaChannel(target)
     end
 end
 
-local function DecodeTransferNote(transfer)
+local function DecodeTransferItem(transfer)
     local payload = table.concat(transfer.chunks, "")
     local compressed
     if string.sub(payload or "", 1, 4) == "B64:" then
@@ -1540,51 +1895,65 @@ local function DecodeTransferNote(transfer)
         compressed = PercentDecode(payload)
     end
     local serialized = DecompressText(compressed)
-    return DeserializeNote(serialized)
+    if WowNote_IsGenericTransferSerialized and WowNote_IsGenericTransferSerialized(serialized) and WowNote_DecodeGenericTransferSerialized then
+        local item = WowNote_DecodeGenericTransferSerialized(serialized)
+        if item then return item end
+    end
+    return { type = "note", title = "Shared note", data = DeserializeNote(serialized) }
 end
 
 local function SaveIncomingNote(pendingId)
     InitDB()
     local pending = pendingIncomingNotes[pendingId]
-    if not pending or not pending.note then
-        Print("Shared note request is no longer available.")
+    if not pending or not pending.item then
+        Print("Shared WowNote data request is no longer available.")
         return
     end
 
-    local note = pending.note
     local sender = pending.sender
-    local guid = GenerateGUID()
-    local now = time()
-
-    note.guid = guid
-    if not note.version or Trim(note.version or "") == "" then
-        note.version = WOWNOTE_NOTE_FORMAT_VERSION
-    end
-    note.title = Trim(note.title or "Shared note")
-    if note.title == "" then
-        note.title = "Shared note"
-    end
-    note.title = note.title .. " (from " .. tostring(sender or "Unknown") .. ")"
-    note.created = now
-    note.updated = now
-    note.sharedFrom = sender
-
-    WowNoteDB.notes[guid] = note
-    WowNoteDB.share.received = (WowNoteDB.share.received or 0) + 1
-    pendingIncomingNotes[pendingId] = nil
-
-    if pending.transferId then
-        SendShareAck(sender, pending.transferId, "accepted", pending.returnMode)
+    local ok, msg
+    if WowNote_SaveTransferredDataItem then
+        ok, msg = WowNote_SaveTransferredDataItem(pending.item, sender)
+    else
+        ok, msg = false, "Data import handler is not available."
     end
 
-    if listFrame then
-        RefreshList()
+    if ok then
+        WowNoteDB.share.received = (WowNoteDB.share.received or 0) + 1
+        pendingIncomingNotes[pendingId] = nil
+        if pending.transferId then
+            SendShareAck(sender, pending.transferId, "saved", pending.returnMode)
+        end
+        if listFrame then RefreshList() end
+        Print(msg or "Shared WowNote data saved.")
+    else
+        Print(msg or "Shared WowNote data could not be saved.")
     end
-    Print("Shared note from " .. tostring(sender or "Unknown") .. " saved: " .. note.title)
+end
+
+local function SaveReceivedNoteDirect(sender, item, transfer)
+    InitDB()
+    local ok, msg
+    if WowNote_SaveTransferredDataItem then
+        ok, msg = WowNote_SaveTransferredDataItem(item, sender)
+    else
+        ok, msg = false, "Data import handler is not available."
+    end
+
+    if ok then
+        WowNoteDB.share.received = (WowNoteDB.share.received or 0) + 1
+        if transfer and transfer.id then
+            SendShareAck(sender, transfer.id, "saved", transfer.returnMode)
+        end
+        if listFrame then RefreshList() end
+        Print("Accepted WowNote transfer from " .. tostring(sender or "Unknown") .. ": " .. tostring(msg or item.title or "data"))
+    else
+        Print(msg or "Accepted WowNote transfer could not be saved.")
+    end
 end
 
 StaticPopupDialogs["WOWNOTE_ACCEPT_SHARED_NOTE"] = {
-    text = "Accept WowNote note from %s?\n\n%s",
+    text = "Accept WowNote data from %s?\n\n%s",
     button1 = "Accept",
     button2 = "Decline",
     OnAccept = function(self, pendingId)
@@ -1596,7 +1965,7 @@ StaticPopupDialogs["WOWNOTE_ACCEPT_SHARED_NOTE"] = {
             SendShareAck(pending.sender, pending.transferId, "declined", pending.returnMode)
         end
         pendingIncomingNotes[pendingId] = nil
-        Print("Shared note declined.")
+        Print("Shared WowNote data declined.")
     end,
     timeout = 0,
     whileDead = 1,
@@ -1604,23 +1973,65 @@ StaticPopupDialogs["WOWNOTE_ACCEPT_SHARED_NOTE"] = {
     preferredIndex = 3,
 }
 
+StaticPopupDialogs["WOWNOTE_ACCEPT_TRANSFER_REQUEST"] = {
+    text = "Accept WowNote transfer from %s?\n\n%s",
+    button1 = "Accept",
+    button2 = "Decline",
+    OnAccept = function(self, requestId)
+        local request = pendingIncomingTransferRequests[requestId]
+        if not request then
+            Print("WowNote transfer request is no longer available.")
+            return
+        end
+        approvedIncomingTransfers[request.transferId] = true
+        SendShareAck(request.sender, request.transferId, "request-accepted", request.returnMode)
+        pendingIncomingTransferRequests[requestId] = nil
+        if shareReceiveStatusText then
+            shareReceiveStatusText:SetText("Accepted request from " .. tostring(request.sender or "Unknown") .. ". Waiting for packets...")
+        end
+        Print("Accepted WowNote transfer from " .. tostring(request.sender or "Unknown") .. ". Waiting for packets...")
+    end,
+    OnCancel = function(self, requestId)
+        local request = pendingIncomingTransferRequests[requestId]
+        if request then
+            SendShareAck(request.sender, request.transferId, "declined", request.returnMode)
+            pendingIncomingTransferRequests[requestId] = nil
+        end
+        Print("WowNote transfer declined.")
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+    preferredIndex = 4,
+}
+
 local function StoreReceivedNote(sender, transfer)
     InitDB()
-    local note = DecodeTransferNote(transfer)
+    local item = DecodeTransferItem(transfer)
     incomingTransfers[transfer.id] = nil
 
-    if not note.version or Trim(note.version or "") == "" then
-        note.version = WOWNOTE_NOTE_FORMAT_VERSION
+    if type(item) ~= "table" then
+        Print("Received WowNote data could not be decoded.")
+        SendShareAck(sender, transfer.id, "declined", transfer.returnMode)
+        return
     end
-    note.title = Trim(note.title or "Shared note")
-    if note.title == "" then
-        note.title = "Shared note"
+
+    local title = Trim(item.title or item.key or item.type or "WowNote data")
+    if title == "" then title = "WowNote data" end
+
+    if transfer.approved then
+        approvedIncomingTransfers[transfer.id] = nil
+        SaveReceivedNoteDirect(sender, item, transfer)
+        if shareReceiveStatusText then
+            shareReceiveStatusText:SetText("Saved data from " .. tostring(sender or "Unknown") .. ": " .. tostring(title))
+        end
+        return
     end
 
     local pendingId = tostring(sender or "Unknown") .. ":" .. tostring(transfer.id or BuildTransferId())
     pendingIncomingNotes[pendingId] = {
         sender = sender,
-        note = note,
+        item = item,
         received = time(),
         transferId = transfer.id,
         returnMode = transfer.returnMode,
@@ -1628,7 +2039,7 @@ local function StoreReceivedNote(sender, transfer)
 
     SendShareAck(sender, transfer.id, "received", transfer.returnMode)
 
-    local summary = note.title
+    local summary = tostring(title)
     if string.len(summary) > 60 then
         summary = string.sub(summary, 1, 57) .. "..."
     end
@@ -1636,7 +2047,7 @@ local function StoreReceivedNote(sender, transfer)
     if StaticPopup_Show then
         StaticPopup_Show("WOWNOTE_ACCEPT_SHARED_NOTE", tostring(sender or "Unknown"), summary, pendingId)
     else
-        Print("Shared note received from " .. tostring(sender or "Unknown") .. ": " .. note.title .. ". Type /wn to open WowNote.")
+        Print("Shared WowNote data received from " .. tostring(sender or "Unknown") .. ": " .. title .. ". Type /wn to open WowNote.")
     end
 end
 
@@ -1674,15 +2085,48 @@ HandleAddonMessage = function(prefix, message, channel, sender)
                 if shareStatusText then
                     shareStatusText:SetText("Receiver answered. Sending/assembling packets...")
                 end
+            elseif state == "request-accepted" then
+                if channel == "CHATWHISPER" or channel == "CHANNEL" or channel == "PARTY" or channel == "RAID" or channel == "GUILD" or channel == "BATTLEGROUND" then
+                    transfer.returnMode = channel
+                else
+                    transfer.returnMode = "WHISPER"
+                end
+                Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " accepted the transfer request. Sending packets via " .. tostring(transfer.returnMode or "WHISPER") .. "...")
+                if shareStatusText then
+                    shareStatusText:SetText("Receiver accepted request. Sending packets via " .. tostring(transfer.returnMode or "WHISPER") .. "...")
+                end
+                SendPreparedTransfer(transferId)
+            elseif string.sub(state, 1, 8) == "missing:" then
+                local listText = string.sub(state, 9)
+                local indices = ParsePacketList(listText, transfer.total)
+                if table.getn(indices) > 0 then
+                    if channel == "CHATWHISPER" or channel == "CHANNEL" or channel == "PARTY" or channel == "RAID" or channel == "GUILD" or channel == "BATTLEGROUND" then
+                        transfer.returnMode = channel
+                    end
+                    Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " is missing packet(s): " .. PacketListToText(indices) .. ". Resending only those.")
+                    SendSelectedTransferPackets(transferId, indices, "missing")
+                end
             elseif state == "received" then
                 Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " got the WowNote transfer and should see the accept dialog.")
                 if shareStatusText then
                     shareStatusText:SetText("Receiver got transfer. Waiting for accept/decline...")
                 end
-            elseif state == "accepted" then
-                Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " accepted the shared note.")
+            elseif state == "accepted" or state == "saved" then
+                Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " saved the shared note.")
                 if shareStatusText then
-                    shareStatusText:SetText("Receiver accepted the note.")
+                    shareStatusText:SetText("Receiver saved the note. Transfer complete.")
+                end
+                sentTransfers[transferId] = nil
+            elseif state == "auth-required" then
+                Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " is not in receive mode.")
+                if shareStatusText then
+                    shareStatusText:SetText("Receiver is not in receive mode. Ask them to open Share and enable Receive.")
+                end
+                sentTransfers[transferId] = nil
+            elseif state == "auth-failed" then
+                Print("Receiver " .. tostring(sender or transfer.target or "Unknown") .. " rejected the transfer code.")
+                if shareStatusText then
+                    shareStatusText:SetText("Receiver code rejected. Check the code and send again.")
                 end
                 sentTransfers[transferId] = nil
             elseif state == "declined" then
@@ -1693,9 +2137,85 @@ HandleAddonMessage = function(prefix, message, channel, sender)
                 sentTransfers[transferId] = nil
             end
         end
+    elseif command == "M" then
+        local totalText, sizeText, authText, titleText = string.match(rest or "", "^([^|]+)|([^|]+)|([^|]+)|(.*)$")
+        if not titleText then
+            totalText, sizeText, titleText = string.match(rest or "", "^([^|]+)|([^|]+)|(.*)$")
+            authText = ""
+        end
+        local total = tonumber(totalText or "0") or 0
+        local size = tonumber(sizeText or "0") or 0
+        if total <= 0 or total > 200 or size < 0 or size > 65535 then return end
+
+        local allowed, reason = IsDataReceiveAllowed(PercentDecode(authText or ""))
+        if not allowed then
+            if reason == "receive-disabled" then
+                SendShareAck(sender, transferId, "auth-required", channel)
+            else
+                SendShareAck(sender, transferId, "auth-failed", channel)
+            end
+            return
+        end
+
+        local title = PercentDecode(titleText or "")
+        if Trim(title or "") == "" then title = "Shared note" end
+        local requestId = tostring(sender or "Unknown") .. ":" .. tostring(transferId)
+
+        if approvedIncomingTransfers[transferId] then
+            local existing = incomingTransfers[transferId]
+            if existing and existing.count and existing.total and existing.count < existing.total then
+                existing.returnMode = channel
+                RequestMissingPackets(sender, existing, "retry-request")
+            else
+                SendShareAck(sender, transferId, "request-accepted", channel)
+            end
+            return
+        end
+        if pendingIncomingTransferRequests[requestId] then
+            return
+        end
+
+        pendingIncomingTransferRequests[requestId] = {
+            sender = sender,
+            transferId = transferId,
+            total = total,
+            size = size,
+            title = title,
+            returnMode = channel,
+            received = time(),
+        }
+
+        local summary = title .. "\nPackets: " .. tostring(total) .. "\nSize: " .. tostring(size) .. " bytes"
+        Print("WowNote transfer request received from " .. tostring(sender or "Unknown") .. ": " .. title .. ".")
+        if shareReceiveStatusText then
+            shareReceiveStatusText:SetText("Request from " .. tostring(sender or "Unknown") .. ": " .. tostring(title) .. " (" .. tostring(total) .. " packets).")
+        end
+        if StaticPopup_Show then
+            StaticPopup_Show("WOWNOTE_ACCEPT_TRANSFER_REQUEST", tostring(sender or "Unknown"), summary, requestId)
+        else
+            Print("Popup support is unavailable. Transfer cannot be accepted through the UI.")
+        end
     elseif command == "B" then
+        if not approvedIncomingTransfers[transferId] then
+            SendShareAck(sender, transferId, "auth-required", channel)
+            return
+        end
         local total = tonumber(rest or "0") or 0
         if total <= 0 or total > 200 then return end
+        local existing = incomingTransfers[transferId]
+        if existing and existing.total == total then
+            existing.sender = sender
+            existing.returnMode = channel
+            existing.approved = approvedIncomingTransfers[transferId] and true or false
+            existing.lastPacketAt = time and time() or existing.lastPacketAt
+            SendShareAck(sender, transferId, "begin", channel)
+            RequestMissingPackets(sender, existing, "resume-begin")
+            if shareReceiveStatusText then
+                shareReceiveStatusText:SetText("Resuming from " .. tostring(sender or "Unknown") .. ": " .. tostring(existing.count or 0) .. "/" .. tostring(total) .. " packets.")
+            end
+            EnsureCommMaintenanceFrame()
+            return
+        end
         incomingTransfers[transferId] = {
             id = transferId,
             sender = sender,
@@ -1703,9 +2223,15 @@ HandleAddonMessage = function(prefix, message, channel, sender)
             chunks = {},
             count = 0,
             started = time(),
+            lastPacketAt = time(),
             returnMode = channel,
+            approved = approvedIncomingTransfers[transferId] and true or false,
         }
         SendShareAck(sender, transferId, "begin", channel)
+        EnsureCommMaintenanceFrame()
+        if shareReceiveStatusText then
+            shareReceiveStatusText:SetText("Receiving from " .. tostring(sender or "Unknown") .. ": 0/" .. tostring(total) .. " packets.")
+        end
     elseif command == "C" then
         local indexText, payload = string.match(rest or "", "^([^|]+)|(.*)$")
         local index = tonumber(indexText or "0") or 0
@@ -1715,6 +2241,10 @@ HandleAddonMessage = function(prefix, message, channel, sender)
             transfer.count = transfer.count + 1
         end
         transfer.chunks[index] = payload or ""
+        transfer.lastPacketAt = time and time() or transfer.lastPacketAt
+        if shareReceiveStatusText then
+            shareReceiveStatusText:SetText("Receiving from " .. tostring(sender or transfer.sender or "Unknown") .. ": " .. tostring(transfer.count or 0) .. "/" .. tostring(transfer.total or 0) .. " packets.")
+        end
         if transfer.count >= transfer.total then
             StoreReceivedNote(sender, transfer)
         end
@@ -1722,6 +2252,8 @@ HandleAddonMessage = function(prefix, message, channel, sender)
         local transfer = incomingTransfers[transferId]
         if transfer and transfer.count >= transfer.total then
             StoreReceivedNote(sender, transfer)
+        elseif transfer then
+            RequestMissingPackets(sender, transfer, "end-marker")
         end
     end
 end
@@ -1773,8 +2305,8 @@ CreateShareUI = function()
     if shareFrame then return end
 
     shareFrame = CreateFrame("Frame", "WowNoteShareFrame", UIParent)
-    shareFrame:SetWidth(430)
-    shareFrame:SetHeight(205)
+    shareFrame:SetWidth(520)
+    shareFrame:SetHeight(340)
     shareFrame:SetPoint("CENTER", UIParent, "CENTER", 80, 40)
     shareFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if shareFrame.SetToplevel then shareFrame:SetToplevel(true) end
@@ -1793,6 +2325,9 @@ CreateShareUI = function()
         insets = { left = 11, right = 12, top = 12, bottom = 11 }
     })
     shareFrame:Hide()
+    shareFrame:SetScript("OnHide", function()
+        SetDataReceiveEnabled(false)
+    end)
 
     local title = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 18, -16)
@@ -1829,9 +2364,43 @@ CreateShareUI = function()
 
     local hint = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     hint:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 110, -77)
-    hint:SetWidth(290)
+    hint:SetWidth(380)
     hint:SetJustifyH("LEFT")
-    hint:SetText("Enter a player name manually or use target. Enter sends.")
+    hint:SetText("Enter the receiver name, then enter the 4-digit code shown on the receiver client.")
+
+    local codeLabel = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    codeLabel:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 22, -104)
+    codeLabel:SetText("4-digit code")
+
+    local codeBg = CreateFrame("Frame", nil, shareFrame)
+    codeBg:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 110, -98)
+    codeBg:SetWidth(90)
+    codeBg:SetHeight(28)
+    codeBg:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    })
+    codeBg:SetBackdropColor(0, 0, 0, 0.85)
+
+    shareAuthEdit = MakeEditBox(codeBg, false)
+    shareAuthEdit:SetPoint("TOPLEFT", codeBg, "TOPLEFT", 4, -4)
+    shareAuthEdit:SetPoint("BOTTOMRIGHT", codeBg, "BOTTOMRIGHT", -4, 4)
+    if shareAuthEdit.SetMaxLetters then shareAuthEdit:SetMaxLetters(4) end
+    if shareAuthEdit.SetNumeric then shareAuthEdit:SetNumeric(true) end
+    shareAuthEdit:SetScript("OnEnterPressed", function(self)
+        SendCurrentNoteToPlayer(shareTargetEdit:GetText())
+        self:ClearFocus()
+    end)
+
+    local codeHint = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    codeHint:SetPoint("LEFT", codeBg, "RIGHT", 8, 0)
+    codeHint:SetWidth(260)
+    codeHint:SetJustifyH("LEFT")
+    codeHint:SetText("Required before sending. No request is sent without this 4-digit code.")
 
     local targetButton = MakeButton(shareFrame, "Target", 70, 24)
     targetButton:SetPoint("LEFT", bg, "RIGHT", 8, 0)
@@ -1845,9 +2414,13 @@ CreateShareUI = function()
     end)
 
     local sendButton = MakeButton(shareFrame, "Send", 80, 24)
-    sendButton:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 74, -104)
+    sendButton:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 74, -140)
     sendButton:SetScript("OnClick", function()
-        SendCurrentNoteToPlayer(shareTargetEdit:GetText())
+        if WowNote_OpenDataSendPicker then
+            WowNote_OpenDataSendPicker(shareTargetEdit:GetText(), shareAuthEdit and shareAuthEdit:GetText() or "")
+        else
+            SendCurrentNoteToPlayer(shareTargetEdit:GetText())
+        end
     end)
 
     local sendTargetButton = MakeButton(shareFrame, "Send target", 110, 24)
@@ -1856,7 +2429,11 @@ CreateShareUI = function()
         if UnitName and UnitExists and UnitIsPlayer and UnitExists("target") and UnitIsPlayer("target") then
             local name = UnitName("target")
             shareTargetEdit:SetText(name)
-            SendCurrentNoteToPlayer(name)
+            if WowNote_OpenDataSendPicker then
+                WowNote_OpenDataSendPicker(name, shareAuthEdit and shareAuthEdit:GetText() or "")
+            else
+                SendCurrentNoteToPlayer(name)
+            end
         else
             shareStatusText:SetText("No player target selected.")
         end
@@ -1866,17 +2443,46 @@ CreateShareUI = function()
     closeButton:SetPoint("LEFT", sendTargetButton, "RIGHT", 8, 0)
     closeButton:SetScript("OnClick", function() shareFrame:Hide() end)
 
+    local receiveTitle = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    receiveTitle:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 22, -220)
+    receiveTitle:SetText("Receive data")
+
+    shareReceiveButton = MakeButton(shareFrame, "Receive: OFF", 110, 24)
+    shareReceiveButton:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 110, -214)
+    shareReceiveButton:SetScript("OnClick", function()
+        if dataReceiveEnabled then
+            SetDataReceiveEnabled(false)
+            SetShareStatus("Receiving disabled.")
+        else
+            dataReceiveCode = BuildReceiveCode()
+            SetDataReceiveEnabled(true)
+            SetShareStatus("Receiving enabled. Give the code to the sender.")
+        end
+    end)
+
+    shareReceiveCodeText = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    shareReceiveCodeText:SetPoint("LEFT", shareReceiveButton, "RIGHT", 10, 0)
+    shareReceiveCodeText:SetWidth(250)
+    shareReceiveCodeText:SetJustifyH("LEFT")
+
+    shareReceiveStatusText = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    shareReceiveStatusText:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 22, -246)
+    shareReceiveStatusText:SetWidth(476)
+    shareReceiveStatusText:SetJustifyH("LEFT")
+
     shareStatusText = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    shareStatusText:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 22, -146)
-    shareStatusText:SetWidth(386)
+    shareStatusText:SetPoint("TOPLEFT", shareFrame, "TOPLEFT", 22, -180)
+    shareStatusText:SetWidth(476)
     shareStatusText:SetJustifyH("LEFT")
     shareStatusText:SetText("Recipient must have WowNote installed. Manual input: Player or Player-Realm.")
+    RefreshReceiveStatus()
 end
 
 WowNote_OpenShare = function()
     CreateUI()
     CreateShareUI()
     shareFrame:Show()
+    RefreshReceiveStatus()
     RaiseFrame(shareFrame)
     if shareTargetEdit then
         shareTargetEdit:SetFocus()
@@ -1887,7 +2493,7 @@ CreateUI = function()
     if frame then return end
 
     frame = CreateFrame("Frame", "WowNoteFrame", UIParent)
-    frame:SetWidth(760)
+    frame:SetWidth(910)
     frame:SetHeight(540)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
@@ -1917,7 +2523,19 @@ CreateUI = function()
 
     local listLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     listLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -52)
-    listLabel:SetText("Notes (right-click for options)")
+    listLabel:SetText("Notes")
+
+    local normalNotesTab = MakeButton(frame, "Normal", 72, 22)
+    normalNotesTab:SetPoint("TOPLEFT", frame, "TOPLEFT", 68, -47)
+    normalNotesTab:SetScript("OnClick", function()
+        if listFrame then RefreshList() end
+    end)
+
+    local characterNotesTab = MakeButton(frame, "Characters", 92, 22)
+    characterNotesTab:SetPoint("LEFT", normalNotesTab, "RIGHT", 4, 0)
+    characterNotesTab:SetScript("OnClick", function()
+        if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end
+    end)
 
     local leftBg = CreateFrame("Frame", nil, frame)
     leftBg:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -70)
@@ -2069,134 +2687,30 @@ CreateUI = function()
     newButton:SetScript("OnClick", ClearEditor)
 
     local saveButton = MakeButton(frame, "Save", 75, 24)
-    saveButton:SetPoint("LEFT", newButton, "RIGHT", 8, 0)
+    saveButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 342, -424)
     saveButton:SetScript("OnClick", function() SaveNote(false) end)
 
     local deleteButton = MakeButton(frame, "Delete", 75, 24)
-    deleteButton:SetPoint("LEFT", saveButton, "RIGHT", 8, 0)
+    deleteButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 428, -424)
     deleteButton:SetScript("OnClick", function() DeleteNote() end)
 
     editToggleButton = MakeButton(frame, "Edit", 75, 24)
-    editToggleButton:SetPoint("LEFT", deleteButton, "RIGHT", 8, 0)
+    editToggleButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 514, -424)
     editToggleButton:SetScript("OnClick", function() SetEditMode(not editMode) end)
 
-    local talentButton = MakeButton(frame, "Talents", 75, 24)
-    talentButton:SetPoint("LEFT", editToggleButton, "RIGHT", 8, 0)
-    talentButton:SetScript("OnClick", function() WowNote_OpenTalents() end)
-
-    local exportButton = MakeButton(frame, "Export", 75, 24)
-    exportButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 256, -452)
-    exportButton:SetScript("OnClick", function() WowNote_ExportCurrentNoteToDialog() end)
-
-    local importButton = MakeButton(frame, "Import", 75, 24)
-    importButton:SetPoint("LEFT", exportButton, "RIGHT", 8, 0)
-    importButton:SetScript("OnClick", function() WowNote_OpenImportNoteDialog() end)
-
-    local drawButton = MakeButton(frame, "Draw", 70, 24)
-    drawButton:SetPoint("LEFT", importButton, "RIGHT", 8, 0)
-    drawButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Screen Draw", 1, 0.82, 0)
-        GameTooltip:AddLine("Open the screen drawing overlay for raid explanations.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    drawButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    drawButton:SetScript("OnClick", function()
-        if WowNote_OpenScreenDraw then
-            WowNote_OpenScreenDraw()
-        else
-            Print("Screen Draw module is not loaded.")
-        end
-    end)
-
-    local tacticsButton = MakeButton(frame, "Tactics", 78, 24)
-    tacticsButton:SetPoint("LEFT", drawButton, "RIGHT", 8, 0)
-    tacticsButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Tactical Board", 1, 0.82, 0)
-        GameTooltip:AddLine("Open a shareable tactical drawing board for boss planning.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    tacticsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    tacticsButton:SetScript("OnClick", function()
-        if WowNote_OpenTacticalMap then
-            WowNote_OpenTacticalMap()
-        else
-            Print("Tactical Map module is not loaded.")
-        end
-    end)
-
-    local raidIdsButton = MakeButton(frame, "Raid IDs", 90, 24)
-    raidIdsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 256, -480)
-    raidIdsButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Raid ID Tracker", 1, 0.82, 0)
-        GameTooltip:AddLine("Show saved raid lockouts for all characters on this account.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    raidIdsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    raidIdsButton:SetScript("OnClick", function()
-        if WowNote_OpenRaidIdTracker then
-            WowNote_OpenRaidIdTracker()
-        else
-            Print("Raid ID Tracker module is not loaded.")
-        end
-    end)
-
-    local lootToolsButton = MakeButton(frame, "Loot Tools", 105, 24)
-    lootToolsButton:SetPoint("LEFT", raidIdsButton, "RIGHT", 8, 0)
-    lootToolsButton:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText("Loot Tools", 1, 0.82, 0)
-        GameTooltip:AddLine("Open Auto Roll, Auto Sell, and Auto Repair settings.", 1, 1, 1, true)
-        GameTooltip:Show()
-    end)
-    lootToolsButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    lootToolsButton:SetScript("OnClick", function()
-        if WowNote_OpenAutoLootRoller then
-            WowNote_OpenAutoLootRoller()
-        else
-            Print("Loot Tools module is not loaded.")
-        end
-    end)
-
-    local raidPlannerButton = MakeButton(frame, "Raid Planner", 105, 24)
-    raidPlannerButton:SetPoint("LEFT", lootToolsButton, "RIGHT", 8, 0)
-    raidPlannerButton:SetScript("OnClick", function() WowNote_OpenRaidPlanner() end)
-
-    local bankButton = MakeButton(frame, "Bank", 60, 24)
-    bankButton:SetPoint("LEFT", raidPlannerButton, "RIGHT", 8, 0)
-    bankButton:SetScript("OnClick", function()
-        if WowNote_OpenBankViewer then
-            WowNote_OpenBankViewer()
-        else
-            Print("Bank Viewer module is not loaded.")
-        end
-    end)
-
-    local trackerButton = MakeButton(frame, "Tracker", 78, 24)
-    trackerButton:SetPoint("LEFT", bankButton, "RIGHT", 8, 0)
-    trackerButton:SetScript("OnClick", function()
-        if WowNote_OpenItemTracker then
-            WowNote_OpenItemTracker()
-        else
-            Print("Item Tracker module is not loaded.")
-        end
-    end)
-
-    local restockButton = MakeButton(frame, "Restock", 80, 24)
-    restockButton:SetPoint("LEFT", tacticsButton, "RIGHT", 8, 0)
-    restockButton:SetScript("OnClick", function()
-        if WowNote_OpenRestock then
-            WowNote_OpenRestock()
-        else
-            Print("Restock module is not loaded.")
-        end
-    end)
-
-    local helpButton = MakeButton(frame, "Help", 60, 24)
-    helpButton:SetPoint("LEFT", restockButton, "RIGHT", 8, 0)
-    helpButton:SetScript("OnClick", function() WowNote_PrintHelp() end)
+    if WowNote_BuildSideMenu then
+        WowNote_BuildSideMenu(frame, MakeButton)
+    else
+        local sideTitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        sideTitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 748, -52)
+        sideTitle:SetText("Main")
+        local notesButton = MakeButton(frame, "Notes", 130, 24)
+        notesButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 748, -76)
+        notesButton:SetScript("OnClick", function() WowNote_Open() end)
+        local settingsButton = MakeButton(frame, "Settings", 130, 24)
+        settingsButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 748, -106)
+        settingsButton:SetScript("OnClick", function() if WowNote_OpenSettings then WowNote_OpenSettings() end end)
+    end
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
@@ -2600,11 +3114,11 @@ CreateItemUI = function()
     newButton:SetScript("OnClick", ClearItemEditor)
 
     local saveButton = MakeButton(itemFrame, "Save", 62, 24)
-    saveButton:SetPoint("LEFT", newButton, "RIGHT", 8, 0)
+    saveButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 342, -424)
     saveButton:SetScript("OnClick", function() SaveItem(false) end)
 
     local deleteButton = MakeButton(itemFrame, "Delete", 62, 24)
-    deleteButton:SetPoint("LEFT", saveButton, "RIGHT", 8, 0)
+    deleteButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 428, -424)
     deleteButton:SetScript("OnClick", function() DeleteItem() end)
 
     local insertButton = MakeButton(itemFrame, "Insert", 82, 24)
@@ -3539,6 +4053,7 @@ function WowNote_PrintHelp()
     Print("/wn or /wownote - Toggle the main WowNote window.")
     Print("/wn help - Show this command overview.")
     Print("/wn new - Open WowNote and create a new empty note.")
+    Print("/wn share - Open the send/receive dialog with receiver-code protected note sharing.")
     Print("/wn talents - Open the talent planner.")
     Print("/wn talents load - Load the selected note's talent build into the planner.")
     Print("/wn raid - Open the raid planner.")
@@ -3556,6 +4071,10 @@ function WowNote_PrintHelp()
     Print("/wn tracker show - Show the tracker HUD.")
     Print("/wn tracker hide - Hide the tracker HUD.")
     Print("/wn restock - Open the merchant restock assistant.")
+    Print("/wn pallybuffs - Open PallyBuffs assignments.")
+    Print("/wn pally sync - Request a PallyBuffs assignment sync.")
+    Print("/wn pally test on - Enable the PallyBuffs sample/test mode.")
+    Print("/wn pally test off - Disable the PallyBuffs sample/test mode.")
     Print("/wn joinchan - Join the WowNote addon channel.")
     Print("/wn chaninfo - Print addon channel status.")
     Print("/wn chantest - Send a visible addon channel test message.")
@@ -3563,9 +4082,9 @@ function WowNote_PrintHelp()
     Print("/wn pingchat <character> - Send a visible chat based ping.")
     Print("/wn pingchan <character> - Send a channel based addon ping.")
     Print("/wn pingroutes <character> - Test all configured communication routes.")
-    Print("/wn send <character> - Send the current note to a character.")
-    Print("/wn sendchat <character> - Send the current note through chat packets.")
-    Print("/wn sendchan <character> - Send the current note through the addon channel.")
+    Print("/wn send <character> <code> - Send the current note through the code-protected request/accept transfer.")
+    Print("/wn sendchat <character> - Legacy debug path; normal protected sending uses /wn share.")
+    Print("/wn sendchan <character> - Legacy debug path; normal protected sending uses /wn share.")
     Print("/wn debug on - Enable communication debug output.")
     Print("/wn debug off - Disable communication debug output.")
 end
@@ -3580,6 +4099,13 @@ SlashCmdList["WOWNOTE"] = function(msg)
     elseif lowerMsg == "new" or lowerMsg == "neu" then
         WowNote_Open()
         ClearEditor()
+    elseif lowerMsg == "share" or lowerMsg == "send" or lowerMsg == "transfer" or lowerMsg == "datatransfer" or lowerMsg == "teilen" then
+        if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("dataTransfer") then Print("Data transfer module is disabled."); return end
+        WowNote_OpenShare()
+    elseif lowerMsg == "settings" or lowerMsg == "optionen" or lowerMsg == "options" then
+        if WowNote_OpenSettings then WowNote_OpenSettings() else Print("Settings module is not loaded.") end
+    elseif lowerMsg == "characters" or lowerMsg == "characternotes" or lowerMsg == "playernotes" or lowerMsg == "spielernotizen" then
+        if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end
     elseif lowerMsg == "talents" or lowerMsg == "talente" or lowerMsg == "talent" then
         WowNote_OpenTalents()
     elseif lowerMsg == "raid" or lowerMsg == "raidplanner" or lowerMsg == "lfm" then
@@ -3664,6 +4190,32 @@ SlashCmdList["WOWNOTE"] = function(msg)
         else
             Print("Restock module is not loaded.")
         end
+    elseif lowerMsg == "pally" or lowerMsg == "pallypower" or lowerMsg == "pallybuffs" or lowerMsg == "buffs" or lowerMsg == "blessings" then
+        if WowNote_OpenPallyBuffs then
+            WowNote_OpenPallyBuffs()
+        else
+            Print("PallyBuffs module is not loaded.")
+        end
+    elseif lowerMsg == "pally sync" or lowerMsg == "pallypower sync" then
+        if WowNote_PallyPower_RequestSync then
+            WowNote_PallyPower_RequestSync()
+        else
+            Print("PallyBuffs module is not loaded.")
+        end
+    elseif lowerMsg == "pally test" or lowerMsg == "pally test on" or lowerMsg == "pallypower test" or lowerMsg == "pallypower test on" then
+        if WowNote_PallyPower_SetTestMode then
+            WowNote_PallyPower_SetTestMode(true)
+            Print("PallyBuffs test mode enabled.")
+        else
+            Print("PallyBuffs module is not loaded.")
+        end
+    elseif lowerMsg == "pally test off" or lowerMsg == "pallypower test off" then
+        if WowNote_PallyPower_SetTestMode then
+            WowNote_PallyPower_SetTestMode(false)
+            Print("PallyBuffs test mode disabled.")
+        else
+            Print("PallyBuffs module is not loaded.")
+        end
     elseif lowerMsg == "debug" or lowerMsg == "debug on" then
         commDebug = true
         Print("Communication debug enabled.")
@@ -3696,8 +4248,11 @@ SlashCmdList["WOWNOTE"] = function(msg)
         local target = string.match(rawMsg, "^%S+%s+(.+)$")
         SendCurrentNoteToPlayerViaChat(target)
     elseif string.sub(lowerMsg, 1, 5) == "send " or string.sub(lowerMsg, 1, 7) == "teilen " then
-        local target = string.match(rawMsg, "^%S+%s+(.+)$")
-        SendCurrentNoteToPlayer(target)
+        local target, authCode = string.match(rawMsg, "^%S+%s+(%S+)%s+(%S+)$")
+        if not target then
+            target = string.match(rawMsg, "^%S+%s+(.+)$")
+        end
+        SendCurrentNoteToPlayer(target, authCode)
     else
         WowNote_Toggle()
     end
@@ -3729,6 +4284,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Bank Viewer", TITAN_ID, "WowNote_OpenBankViewer")
     TitanPanelRightClickMenu_AddCommand("Item Tracker", TITAN_ID, "WowNote_OpenItemTracker")
     TitanPanelRightClickMenu_AddCommand("Restock", TITAN_ID, "WowNote_OpenRestock")
+    TitanPanelRightClickMenu_AddCommand("PallyBuffs", TITAN_ID, "WowNote_OpenPallyBuffs")
     TitanPanelRightClickMenu_AddCommand("Help", TITAN_ID, "WowNote_PrintHelp")
     TitanPanelRightClickMenu_AddCommand("Screen Draw", TITAN_ID, "WowNote_OpenScreenDraw")
     TitanPanelRightClickMenu_AddSpacer()
@@ -3747,7 +4303,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.10.22",
+        version = "1.12.0",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",

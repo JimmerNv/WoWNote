@@ -177,18 +177,33 @@ local function SaveAllRows()
     WowNote_ItemTracker_Evaluate(true)
 end
 
+local function SaveChangedRow(row, evaluate)
+    if not row or not row.item then return end
+    SaveRow(row)
+    if WowNote_ItemTracker_RefreshHud then WowNote_ItemTracker_RefreshHud() end
+    if evaluate and WowNote_ItemTracker_Evaluate then WowNote_ItemTracker_Evaluate(false) end
+    if WowNote_Restock_CheckMerchant then WowNote_Restock_CheckMerchant() end
+end
+
 local function CreateRow(index)
     local row = rows[index]
     if row then return row end
     row = CreateFrame("Frame", nil, listFrame)
     row:SetWidth(710); row:SetHeight(60)
     row:EnableMouse(true)
+    if row.SetFrameLevel and listFrame.GetFrameLevel then row:SetFrameLevel(listFrame:GetFrameLevel() + 2 + index) end
 
     row.icon = row:CreateTexture(nil, "ARTWORK")
     row.icon:SetWidth(28); row.icon:SetHeight(28); row.icon:SetPoint("TOPLEFT", row, "TOPLEFT", 0, -3)
 
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     row.name:SetPoint("LEFT", row.icon, "RIGHT", 4, 0); row.name:SetWidth(145); row.name:SetJustifyH("LEFT")
+
+    row.itemButton = CreateFrame("Button", nil, row)
+    row.itemButton:SetPoint("TOPLEFT", row.icon, "TOPLEFT", -2, 2)
+    row.itemButton:SetPoint("BOTTOMRIGHT", row.name, "BOTTOMRIGHT", 2, -2)
+    row.itemButton:EnableMouse(true)
+    if row.itemButton.SetFrameLevel and row.GetFrameLevel then row.itemButton:SetFrameLevel(row:GetFrameLevel() + 5) end
 
     row.count = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.count:SetPoint("LEFT", row.name, "RIGHT", 4, 0); row.count:SetWidth(54); row.count:SetJustifyH("LEFT")
@@ -225,6 +240,18 @@ local function CreateRow(index)
     row.autoLabel:SetPoint("LEFT", row.restockEnabled, "RIGHT", 8, 0); row.autoLabel:SetText("Auto")
     row.autoBuy = MakeCheck(row); row.autoBuy:SetPoint("LEFT", row.autoLabel, "RIGHT", 2, 0)
 
+    local function RaiseControl(control, delta)
+        if control and control.SetFrameLevel and row.GetFrameLevel then
+            control:SetFrameLevel(row:GetFrameLevel() + (delta or 6))
+        end
+    end
+    RaiseControl(row.threshold.bg); RaiseControl(row.threshold, 7)
+    RaiseControl(row.target.bg); RaiseControl(row.target, 7)
+    RaiseControl(row.mode); RaiseControl(row.remove)
+    RaiseControl(row.hudEnabled); RaiseControl(row.alertEnabled); RaiseControl(row.textEnabled)
+    RaiseControl(row.sound); RaiseControl(row.repeatEnabled); RaiseControl(row.repeatSeconds.bg); RaiseControl(row.repeatSeconds, 7)
+    RaiseControl(row.restockEnabled); RaiseControl(row.autoBuy)
+
     SetHelp(row.threshold.bg, "Minimum count", "Alert when the counted amount is below this value.")
     SetHelp(row.target.bg, "Target count", "Restock target. The restock assistant buys up to this amount when possible.")
     SetHelp(row.mode, "Count mode", "Char = count only the current character. Acct = count all saved account snapshots.")
@@ -237,14 +264,39 @@ local function CreateRow(index)
     SetHelp(row.restockEnabled, "Restock", "Show this item in the merchant restock assistant when it is below target.")
     SetHelp(row.autoBuy, "Auto-buy", "When enabled, the restock module may buy this item automatically at matching merchants, subject to safety limits.")
 
-    row:SetScript("OnEnter", function(self)
-        if self.item and self.item.link then
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT"); GameTooltip:SetHyperlink(self.item.link); GameTooltip:Show()
+    row.threshold:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveChangedRow(row, true) end)
+    row.threshold:SetScript("OnEditFocusLost", function() SaveChangedRow(row, true) end)
+    row.target:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveChangedRow(row, true) end)
+    row.target:SetScript("OnEditFocusLost", function() SaveChangedRow(row, true) end)
+    row.repeatSeconds:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveChangedRow(row, false) end)
+    row.repeatSeconds:SetScript("OnEditFocusLost", function() SaveChangedRow(row, false) end)
+    row.hudEnabled:SetScript("OnClick", function() SaveChangedRow(row, false) end)
+    row.alertEnabled:SetScript("OnClick", function() SaveChangedRow(row, true) end)
+    row.textEnabled:SetScript("OnClick", function() SaveChangedRow(row, false) end)
+    row.repeatEnabled:SetScript("OnClick", function() SaveChangedRow(row, false) end)
+    row.restockEnabled:SetScript("OnClick", function() SaveChangedRow(row, true) end)
+    row.autoBuy:SetScript("OnClick", function() SaveChangedRow(row, true) end)
+
+    local function ShowItemTooltip(self)
+        local item = row.item
+        if item and item.link then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetHyperlink(item.link)
+            GameTooltip:Show()
+        end
+    end
+    row:SetScript("OnEnter", ShowItemTooltip)
+    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row.itemButton:SetScript("OnEnter", ShowItemTooltip)
+    row.itemButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    row.itemButton:SetScript("OnClick", function()
+        local item = row.item
+        if item and item.link and ChatEdit_InsertLink then
+            ChatEdit_InsertLink(item.link)
         end
     end)
-    row:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    row.mode:SetScript("OnClick", function(self) ToggleMode(row.item); SaveAllRows() end)
-    row.sound:SetScript("OnClick", function(self) CycleSound(row.item); SaveAllRows() end)
+    row.mode:SetScript("OnClick", function(self) ToggleMode(row.item); SaveChangedRow(row, true); WowNote_ItemTracker_Refresh() end)
+    row.sound:SetScript("OnClick", function(self) CycleSound(row.item); SaveChangedRow(row, false); WowNote_ItemTracker_Refresh() end)
     row.remove:SetScript("OnClick", function(self)
         if row.item and row.item.itemId then WowNoteDB.itemTracker.trackedItems[row.item.itemId] = nil end
         WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
@@ -452,9 +504,12 @@ local function CreateUI()
     bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -132); bg:SetWidth(770); bg:SetHeight(368)
     bg:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 4, right = 4, top = 4, bottom = 4 } })
     bg:SetBackdropColor(0,0,0,0.72)
+    if bg.SetFrameLevel and frame.GetFrameLevel then bg:SetFrameLevel(frame:GetFrameLevel() + 1) end
     local scroll = CreateFrame("ScrollFrame", "WowNoteItemTrackerScrollFrame", bg, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", bg, "TOPLEFT", 8, -8); scroll:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -28, 8)
     listFrame = CreateFrame("Frame", nil, scroll); listFrame:SetWidth(720); listFrame:SetHeight(356)
+    if scroll.SetFrameLevel and bg.GetFrameLevel then scroll:SetFrameLevel(bg:GetFrameLevel() + 1) end
+    if listFrame.SetFrameLevel and scroll.GetFrameLevel then listFrame:SetFrameLevel(scroll:GetFrameLevel() + 1) end
     scroll:SetScrollChild(listFrame)
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -468,6 +523,13 @@ end
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
-events:SetScript("OnEvent", function()
-    InitDB(); CreateHud(); WowNote_ItemTracker_RefreshHud(); WowNote_ItemTracker_Evaluate(false)
+events:RegisterEvent("BAG_UPDATE")
+events:RegisterEvent("BAG_UPDATE_DELAYED")
+events:SetScript("OnEvent", function(self, event)
+    InitDB(); CreateHud()
+    if event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
+        if WowNote_ItemSnapshots_ScanNow then WowNote_ItemSnapshots_ScanNow() end
+    end
+    WowNote_ItemTracker_RefreshHud()
+    WowNote_ItemTracker_Evaluate(false)
 end)
