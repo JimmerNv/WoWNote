@@ -4043,6 +4043,7 @@ WowNote_OpenTalents = function()
     RaiseFrame(talentFrame)
     RefreshTalentPlanner()
 end
+_G.WowNote_OpenTalents = WowNote_OpenTalents
 
 end
 WowNote_LoadTalentModule()

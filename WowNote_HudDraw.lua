@@ -6,7 +6,7 @@
 local HD = {}
 WowNote_HudDraw = HD
 
-local hudFrame, controlFrame, statusText, scaleText
+local hudFrame, controlFrame, statusText, scaleText, scaleSlider
 local activeDrawing = nil
 local renderTextures = {}
 local hudScale = 42000
@@ -136,6 +136,7 @@ local function RenderHUD()
         statusText:SetText("HUD: " .. tostring(activeDrawing.name or "Tactic") .. " | points " .. tostring(visiblePoints) .. " | scale " .. tostring(hudScale))
     end
     if scaleText then scaleText:SetText(tostring(hudScale)) end
+    if scaleSlider and scaleSlider:GetValue() ~= hudScale then scaleSlider:SetValue(hudScale) end
 end
 
 local function CreateUI()
@@ -150,7 +151,7 @@ local function CreateUI()
     hudFrame:SetScript("OnUpdate", RenderHUD)
 
     controlFrame = CreateFrame("Frame", "WowNoteHudDrawControl", UIParent)
-    controlFrame:SetSize(300, 90)
+    controlFrame:SetSize(430, 90)
     controlFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 260)
     SetFront(controlFrame)
     controlFrame:EnableMouse(true)
@@ -166,24 +167,59 @@ local function CreateUI()
     title:SetText("WowNote Tactical HUD")
     local close = CreateFrame("Button", nil, controlFrame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
+    -- Keep the close button above the HUD control frame background. The HUD
+    -- overlay uses very high frame levels, so the template close button must be
+    -- lifted explicitly or it can appear disabled / stop receiving clicks.
+    close:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 80)
+    close:EnableMouse(true)
+    close:Enable()
+    close:SetScript("OnMouseDown", function() controlFrame:Hide() end)
     close:SetScript("OnClick", function() controlFrame:Hide() end)
+    controlFrame.closeButton = close
 
     local clearBtn = MakeButton(controlFrame, "Clear HUD", 76, 22)
     clearBtn:SetPoint("TOPLEFT", 12, -34)
     clearBtn:SetScript("OnClick", function() activeDrawing = nil; visible = false; HideAllTextures(1); Print("HUD drawing cleared.") end)
-    local minus = MakeButton(controlFrame, "S-", 36, 22)
-    minus:SetPoint("LEFT", clearBtn, "RIGHT", 8, 0)
-    minus:SetScript("OnClick", function() hudScale = math.max(1000, hudScale - 2000); SaveDB(); RenderHUD() end)
+
+    local scaleLabel = controlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    scaleLabel:SetPoint("LEFT", clearBtn, "RIGHT", 10, 0)
+    scaleLabel:SetText("Scale")
+
+    scaleSlider = CreateFrame("Slider", "WowNoteHudDrawScaleSlider", controlFrame, "OptionsSliderTemplate")
+    scaleSlider:SetPoint("LEFT", scaleLabel, "RIGHT", 8, 0)
+    scaleSlider:SetWidth(170)
+    scaleSlider:SetHeight(18)
+    scaleSlider:SetMinMaxValues(1000, 200000)
+    scaleSlider:SetValueStep(1000)
+    if scaleSlider.SetObeyStepOnDrag then scaleSlider:SetObeyStepOnDrag(true) end
+    scaleSlider:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 12)
+    scaleSlider:EnableMouse(true)
+    local sliderLow = getglobal(scaleSlider:GetName() .. "Low")
+    local sliderHigh = getglobal(scaleSlider:GetName() .. "High")
+    local sliderText = getglobal(scaleSlider:GetName() .. "Text")
+    if sliderLow then sliderLow:SetText("1k") end
+    if sliderHigh then sliderHigh:SetText("200k") end
+    if sliderText then sliderText:SetText("") end
+    scaleSlider:SetScript("OnValueChanged", function(self, value)
+        local rounded = math.floor((tonumber(value) or hudScale) / 1000 + 0.5) * 1000
+        rounded = math.max(1000, math.min(200000, rounded))
+        if rounded == hudScale then return end
+        hudScale = rounded
+        if self:GetValue() ~= rounded then self:SetValue(rounded) end
+        SaveDB()
+        RenderHUD()
+    end)
+    scaleSlider:SetValue(hudScale)
+
     scaleText = controlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    scaleText:SetPoint("LEFT", minus, "RIGHT", 8, 0)
+    scaleText:SetPoint("LEFT", scaleSlider, "RIGHT", 10, 0)
     scaleText:SetWidth(58)
-    local plus = MakeButton(controlFrame, "S+", 36, 22)
-    plus:SetPoint("LEFT", scaleText, "RIGHT", 4, 0)
-    plus:SetScript("OnClick", function() hudScale = math.min(200000, hudScale + 2000); SaveDB(); RenderHUD() end)
+    scaleText:SetJustifyH("LEFT")
+    scaleText:SetText(tostring(hudScale))
 
     statusText = controlFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", 12, 10)
-    statusText:SetWidth(276)
+    statusText:SetWidth(406)
     statusText:SetJustifyH("LEFT")
     statusText:SetText("HUD: no drawing")
 end
@@ -201,7 +237,7 @@ function WowNote_HudDraw_ShowDrawing(drawing)
     SetFront(controlFrame)
     controlFrame:Raise()
     RenderHUD()
-    Print("Tactical HUD enabled. Use S-/S+ to calibrate distance scale.")
+    Print("Tactical HUD enabled. Use the scale slider to calibrate distance scale.")
 end
 
 function WowNote_HudDraw_Clear()

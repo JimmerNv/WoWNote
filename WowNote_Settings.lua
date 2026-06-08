@@ -36,6 +36,7 @@ local function EnsureSettings()
     if WowNoteDB.characterNoteOptions.alwaysShow == nil then WowNoteDB.characterNoteOptions.alwaysShow = false end
     WowNoteDB.social = WowNoteDB.social or {}
     if WowNoteDB.social.blockGuildInvite == nil then WowNoteDB.social.blockGuildInvite = false end
+    if WowNoteDB.social.cleanManabonkMail == nil then WowNoteDB.social.cleanManabonkMail = false end
     WowNoteDB.minimap = WowNoteDB.minimap or {}
     if WowNoteDB.minimap.hide == nil then WowNoteDB.minimap.hide = false end
     return WowNoteDB.modules
@@ -93,6 +94,17 @@ function WowNote_SetGuildInviteBlockEnabled(enabled)
     WowNoteDB.social.blockGuildInvite = enabled and true or false
 end
 
+function WowNote_IsManabonkMailCleanerEnabled()
+    EnsureSettings()
+    return WowNoteDB.social.cleanManabonkMail == true
+end
+
+function WowNote_SetManabonkMailCleanerEnabled(enabled)
+    EnsureSettings()
+    WowNoteDB.social.cleanManabonkMail = enabled and true or false
+    if enabled and WowNote_TryCleanManabonkMail then WowNote_TryCleanManabonkMail() end
+end
+
 function WowNote_IsMinimapIconHidden()
     EnsureSettings()
     return WowNoteDB.minimap and WowNoteDB.minimap.hide == true
@@ -127,6 +139,7 @@ local function RefreshSettingsUI()
     end
     if settingsFrame and settingsFrame.alwaysNotesCheck then settingsFrame.alwaysNotesCheck:SetChecked(WowNote_AreCharacterNotesAlwaysShown()) end
     if settingsFrame and settingsFrame.blockGuildCheck then settingsFrame.blockGuildCheck:SetChecked(WowNote_IsGuildInviteBlockEnabled()) end
+    if settingsFrame and settingsFrame.manabonkCleanCheck then settingsFrame.manabonkCleanCheck:SetChecked(WowNote_IsManabonkMailCleanerEnabled()) end
     if settingsFrame and settingsFrame.hideMinimapCheck then settingsFrame.hideMinimapCheck:SetChecked(WowNote_IsMinimapIconHidden()) end
 end
 
@@ -174,7 +187,10 @@ local function CreateSettingsFrame()
     settingsFrame.blockGuildCheck = MakeCheck(settingsFrame, "Block guild invite", 220, -108, WowNote_IsGuildInviteBlockEnabled(), function(checked)
         WowNote_SetGuildInviteBlockEnabled(checked)
     end)
-    settingsFrame.hideMinimapCheck = MakeCheck(settingsFrame, "Hide minimap icon", 220, -138, WowNote_IsMinimapIconHidden(), function(checked)
+    settingsFrame.manabonkCleanCheck = MakeCheck(settingsFrame, "Clean Manabonk mail", 220, -138, WowNote_IsManabonkMailCleanerEnabled(), function(checked)
+        WowNote_SetManabonkMailCleanerEnabled(checked)
+    end)
+    settingsFrame.hideMinimapCheck = MakeCheck(settingsFrame, "Hide minimap icon", 220, -168, WowNote_IsMinimapIconHidden(), function(checked)
         WowNote_SetMinimapIconHidden(checked)
     end)
 

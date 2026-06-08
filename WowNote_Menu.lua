@@ -4,6 +4,11 @@
 local submenu
 local submenuButtons = {}
 local currentMenuKey
+local submenuOwner
+
+local SUBMENU_X_OFFSET = 930
+local SUBMENU_Y_OFFSET = -96
+local SUBMENU_FALLBACK_X_OFFSET = 742
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg)) end
@@ -16,11 +21,18 @@ end
 
 local function EnsureSubmenu(parent)
     if submenu then return submenu end
-    submenu = CreateFrame("Frame", "WowNoteSideSubmenu", parent)
-    submenu:SetWidth(168)
+    submenuOwner = parent
+    -- Keep the submenu anchored to the main WowNote frame, but parent it to UIParent.
+    -- A child frame placed outside the main frame can be visually shown while still losing
+    -- mouse hits to higher-level siblings/overlays. UIParent + explicit strata/level keeps
+    -- the anchored flyout clickable.
+    submenu = CreateFrame("Frame", "WowNoteSideSubmenu", UIParent)
+    submenu:SetWidth(178)
     submenu:SetHeight(180)
-    submenu:SetPoint("TOPLEFT", parent, "TOPLEFT", 930, -96)
-    submenu:SetFrameStrata("DIALOG")
+    submenu:SetPoint("TOPLEFT", parent, "TOPLEFT", SUBMENU_X_OFFSET, SUBMENU_Y_OFFSET)
+    submenu:SetFrameStrata("FULLSCREEN_DIALOG")
+    submenu:SetToplevel(true)
+    submenu:SetFrameLevel((parent:GetFrameLevel() or 1) + 80)
     submenu:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -46,14 +58,40 @@ local function HideSubmenu()
     if submenu then submenu:Hide() end
 end
 
+function WowNote_HideSideSubmenu()
+    HideSubmenu()
+end
+
+local function AttachSubmenuLifecycle(parent)
+    if not parent or parent.__wowNoteSubmenuLifecycleHooked then return end
+    parent.__wowNoteSubmenuLifecycleHooked = true
+    if parent.HookScript then
+        parent:HookScript("OnHide", function() HideSubmenu() end)
+    else
+        local oldOnHide = parent:GetScript("OnHide")
+        parent:SetScript("OnHide", function(self, ...)
+            HideSubmenu()
+            if oldOnHide then oldOnHide(self, ...) end
+        end)
+    end
+end
+
 local function ClearSubmenu()
     for _, button in ipairs(submenuButtons) do
         button:Hide()
+        button:SetScript("OnClick", nil)
+        button:SetScript("OnEnter", nil)
+        button:SetScript("OnLeave", nil)
     end
 end
 
 local function ShowSubmenu(parent, makeButton, title, key, items)
     local menu = EnsureSubmenu(parent)
+    submenuOwner = parent
+    menu:SetParent(UIParent)
+    menu:SetFrameStrata("FULLSCREEN_DIALOG")
+    menu:SetToplevel(true)
+    menu:SetFrameLevel((parent:GetFrameLevel() or 1) + 80)
     ClearSubmenu()
     currentMenuKey = key
     menu.title:SetText(title or "Menu")
@@ -67,10 +105,15 @@ local function ShowSubmenu(parent, makeButton, title, key, items)
         local item = items[i]
         local button = submenuButtons[i]
         if not button then
-            button = makeButton(menu, "", 144, 23)
+            button = makeButton(menu, "", 154, 23)
             button:SetPoint("TOPLEFT", menu, "TOPLEFT", 10, -26 - ((i - 1) * 28))
+            button:EnableMouse(true)
             submenuButtons[i] = button
         end
+        button:SetParent(menu)
+        button:SetFrameStrata("FULLSCREEN_DIALOG")
+        button:SetFrameLevel(menu:GetFrameLevel() + 10 + i)
+        button:EnableMouse(true)
         button:SetText(item.text or "")
         button:SetScript("OnClick", function()
             if item.moduleKey and not IsEnabled(item.moduleKey) then
@@ -94,11 +137,12 @@ local function ShowSubmenu(parent, makeButton, title, key, items)
         button:Show()
     end
     menu:ClearAllPoints()
-    menu:SetPoint("TOPLEFT", parent, "TOPLEFT", 930, -96)
+    menu:SetPoint("TOPLEFT", parent, "TOPLEFT", SUBMENU_X_OFFSET, SUBMENU_Y_OFFSET)
     menu:Show()
+    menu:Raise()
     if menu.GetRight and UIParent and UIParent.GetRight and menu:GetRight() and UIParent:GetRight() and menu:GetRight() > UIParent:GetRight() then
         menu:ClearAllPoints()
-        menu:SetPoint("TOPRIGHT", parent, "TOPLEFT", 742, -96)
+        menu:SetPoint("TOPRIGHT", parent, "TOPLEFT", SUBMENU_FALLBACK_X_OFFSET, SUBMENU_Y_OFFSET)
     end
 end
 
@@ -109,6 +153,7 @@ end
 
 function WowNote_BuildSideMenu(parent, makeButton)
     if not parent or not makeButton then return end
+    AttachSubmenuLifecycle(parent)
 
     local sideTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     sideTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", 748, -52)
@@ -118,6 +163,8 @@ function WowNote_BuildSideMenu(parent, makeButton)
     local function AddButton(text, onClick, tooltip)
         local button = makeButton(parent, text, 130, 24)
         button:SetPoint("TOPLEFT", parent, "TOPLEFT", 748, y)
+        button:EnableMouse(true)
+        button:SetFrameLevel((parent:GetFrameLevel() or 1) + 30)
         y = y - 30
         button:SetScript("OnClick", onClick)
         if tooltip then
@@ -148,8 +195,11 @@ function WowNote_BuildSideMenu(parent, makeButton)
         ShowSubmenu(parent, makeButton, "Quality of Life", "qol", {
             { text = "Raid Planner", tooltip = "Open raid planning presets and roster assignments.", func = function() if WowNote_OpenRaidPlanner then WowNote_OpenRaidPlanner() else Print("Raid Planner module is not loaded.") end end },
             { text = "PallyBuffs", moduleKey = "pallyBuffs", tooltip = "Open Blessing and Aura assignments.", func = function() if WowNote_OpenPallyBuffs then WowNote_OpenPallyBuffs() else Print("PallyBuffs module is not loaded.") end end },
+            { text = "Screen Draw", tooltip = "Open the free screen drawing overlay.", func = function() if WowNote_OpenScreenDraw then WowNote_OpenScreenDraw() else Print("Screen Draw module is not loaded.") end end },
+            { text = "Tactical Board", tooltip = "Open the tactical drawing board for raid tactics.", func = function() if WowNote_OpenTacticalMap then WowNote_OpenTacticalMap() else Print("Tactical Board module is not loaded.") end end },
+            { text = "Clear Tactical HUD", tooltip = "Clear the active tactical HUD overlay.", func = function() if WowNote_HudDraw_Clear then WowNote_HudDraw_Clear() else Print("Tactical HUD module is not loaded.") end end },
         })
-    end, "Open raid planning and PallyBuffs tools.")
+    end, "Open raid planning, PallyBuffs and draw tools.")
 
     AddButton("Data Transfer", function()
         ShowSubmenu(parent, makeButton, "Data Transfer", "transfer", {
@@ -179,6 +229,13 @@ function WowNote_BuildSideMenu(parent, makeButton)
                 local nextValue = not WowNote_IsGuildInviteBlockEnabled()
                 WowNote_SetGuildInviteBlockEnabled(nextValue)
                 Print(nextValue and "Block guild invite enabled." or "Block guild invite disabled.")
+                if WowNote_OpenSocial then WowNote_OpenSocial() end
+            end },
+            { text = "Clean Manabonk Mail", moduleKey = "social", tooltip = "Toggle automatic cleanup of Manabonk mail with The Mischief Maker attachment.", func = function()
+                if not WowNote_SetManabonkMailCleanerEnabled or not WowNote_IsManabonkMailCleanerEnabled then Print("Social settings are not loaded."); return end
+                local nextValue = not WowNote_IsManabonkMailCleanerEnabled()
+                WowNote_SetManabonkMailCleanerEnabled(nextValue)
+                Print(nextValue and "Manabonk mail cleanup enabled." or "Manabonk mail cleanup disabled.")
                 if WowNote_OpenSocial then WowNote_OpenSocial() end
             end },
         })

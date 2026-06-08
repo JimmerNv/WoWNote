@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.14.20
+
+- Added Social option to clean Manabonk mail containing The Mischief Maker.
+- Uses item ID 44817 from the mailbox attachment check and only processes mails with exactly that one attachment.
+- Takes the attachment, removes The Mischief Maker from the bags, and deletes the emptied mail after bag update.
+
+## 1.14.19
+
+- Fixed side submenu lifecycle so anchored submenus close together with the main WoWNote window.
+- Exposed a shared submenu hide helper for future main-frame close/toggle handling.
+
+
+## 1.14.18
+- Replaced the Tactical HUD S-/S+ scale buttons with a single scale slider.
+- Widened the Tactical HUD control frame so scale controls and status text fit cleanly.
+
+## 1.14.17
+
+- Fixed Tactical HUD close button frame level and mouse handling so the X button stays clickable.
+
+
+## 1.14.16
+
+- Added missing Draw Tools entries to the Quality of Life submenu.
+- Added menu access for Screen Draw, Tactical Board and Tactical HUD clearing.
+- Kept the draw tools reachable from the anchored submenu without requiring slash commands.
+
 ## 1.14.13
 
 - Changed Restock buying to purchase the exact missing amount expressed as merchant vendor units instead of one unit at a time.
