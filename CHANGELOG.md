@@ -1,3 +1,29 @@
+## 1.14.24
+
+- Fixed a startup error in PallyPower compatibility where saved assignment loading called `EnsurePally` before the local upvalue was declared.
+- Keeps persisted blessing and aura assignments loading through the local helper instead of accidentally resolving a missing global.
+
+## 1.14.23
+
+- Removed the Item Tracker count-mode button from each row. Item counts are character-only now.
+- Removed the visible repeat-seconds edit field from Item Tracker rows. The Repeat checkbox remains, using the internal default interval.
+- Kept Item Tracker data stored per character in `WowNoteCharDB.itemTracker`.
+
+## 1.14.22
+
+- Restored mailbox-facing Postal-lite controls in the package instead of relying on missing embedded Postal files.
+- Kept Manabonk cleanup automatic and moved manual cleanup into the mailbox toolbar without disturbing other mailbox buttons.
+- Deletes already-empty Manabonk letters when the wand was already taken and only the letter remains.
+- Persists PallyBuffs blessing and aura assignments across client restarts.
+- Stores Item Tracker and Restock configuration per character via `WowNoteCharDB`.
+
+## 1.14.21
+
+- Fixed Manabonk mail cleanup so it no longer depends on `BAG_UPDATE_DELAYED` only.
+- Added timed retry handling after `TakeInboxItem()` because 3.3.5a mailbox state can lag after taking attachments.
+- Added a mailbox-local `Clean Manabonk` button and enabled automatic Manabonk cleanup by default.
+- Deletes The Mischief Maker from bags first, then deletes the emptied Manabonk mail after the inbox confirms the attachment is gone.
+
 # Changelog
 
 ## 1.14.20

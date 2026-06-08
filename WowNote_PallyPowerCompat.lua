@@ -259,7 +259,65 @@ EnsureConfig = function()
     if WowNoteDB.pallyCompat.buffFrameVisible == nil then
         WowNoteDB.pallyCompat.buffFrameVisible = true
     end
+    if type(WowNoteDB.pallyCompat.savedAssignments) ~= "table" then
+        WowNoteDB.pallyCompat.savedAssignments = {}
+    end
+    if type(WowNoteDB.pallyCompat.savedAuras) ~= "table" then
+        WowNoteDB.pallyCompat.savedAuras = {}
+    end
     return WowNoteDB.pallyCompat
+end
+
+local SendPP
+local EnsurePally
+
+local function SavePallyAssignments()
+    local cfg = EnsureConfig()
+    cfg.savedAssignments = {}
+    cfg.savedAuras = {}
+
+    if type(PallyPower_Assignments) == "table" then
+        for name, assignment in pairs(PallyPower_Assignments) do
+            if type(assignment) == "table" then
+                cfg.savedAssignments[name] = {}
+                for classId = 1, MAX_CLASSES do
+                    cfg.savedAssignments[name][classId] = tonumber(assignment[classId]) or 0
+                end
+            end
+        end
+    end
+
+    if type(PallyPower_AuraAssignments) == "table" then
+        for name, aura in pairs(PallyPower_AuraAssignments) do
+            cfg.savedAuras[name] = tonumber(aura) or 0
+        end
+    end
+end
+
+local function LoadSavedPallyAssignments()
+    local cfg = EnsureConfig()
+
+    if type(cfg.savedAssignments) == "table" then
+        for name, assignment in pairs(cfg.savedAssignments) do
+            if type(assignment) == "table" then
+                EnsurePally(name)
+                for classId = 1, MAX_CLASSES do
+                    local value = tonumber(assignment[classId]) or 0
+                    state.assignments[name][classId] = value
+                    PallyPower_Assignments[name][classId] = value
+                end
+            end
+        end
+    end
+
+    if type(cfg.savedAuras) == "table" then
+        for name, aura in pairs(cfg.savedAuras) do
+            EnsurePally(name)
+            local value = tonumber(aura) or 0
+            state.auras[name] = value
+            PallyPower_AuraAssignments[name] = value
+        end
+    end
 end
 
 local function IsTestModeEnabled()
@@ -276,9 +334,6 @@ local function SetTestModeEnabled(value)
         end
     end
 end
-
-local SendPP
-local EnsurePally
 
 local function UpdateFreeAssignButton()
     if freeAssignButton then
@@ -814,6 +869,7 @@ local function SetAssignment(name, classId, blessingId)
     PallyPower_Assignments[name] = PallyPower_Assignments[name] or {}
     PallyPower_Assignments[name][classId] = blessingId
     SendPP("ASSIGN " .. name .. " " .. classId .. " " .. blessingId)
+    SavePallyAssignments()
     if name == UnitName("player") then AnnounceSelf() end
     SetStatus(name .. " -> " .. CLASS_NAMES[classId] .. ": " .. BLESSING_NAMES[blessingId])
 end
@@ -844,6 +900,7 @@ local function SetMassAssignment(name, blessingId, overwrite)
             end
         end
     end
+    SavePallyAssignments()
     if name == UnitName("player") then AnnounceSelf() end
     SetStatus(name .. " -> " .. changed .. " class slots: " .. BLESSING_NAMES[blessingId] .. (overwrite and " (overwrite)" or " (empty only)"))
 end
@@ -859,6 +916,7 @@ local function SetAura(name, auraId)
     state.auras[name] = auraId
     PallyPower_AuraAssignments[name] = auraId
     SendPP("AASSIGN " .. name .. " " .. auraId)
+    SavePallyAssignments()
     if name == UnitName("player") then AnnounceSelf() end
     SetStatus(name .. " aura: " .. AURA_NAMES[auraId])
 end
@@ -880,6 +938,7 @@ local function ClearAssignments()
     if PallyPower and PallyPower.ClearAssignments then
         pcall(function() PallyPower:ClearAssignments(UnitName("player")) end)
     end
+    SavePallyAssignments()
     SetStatus("Clear request sent.")
 end
 
@@ -1610,6 +1669,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         if arg1 == ADDON_NAME or arg1 == "WoWNote" or arg1 == "PallyPower" then
             if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix(PP_PREFIX) end
             EnsureConfig()
+            LoadSavedPallyAssignments()
             RegisterSlashCommands()
             if moduleEnabled then
                 SyncFromPallyPower()
@@ -1621,6 +1681,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
     elseif event == "PLAYER_LOGIN" then
         if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix(PP_PREFIX) end
         EnsureConfig()
+        LoadSavedPallyAssignments()
         RegisterSlashCommands()
         if moduleEnabled then
             SyncFromPallyPower()
@@ -1632,6 +1693,7 @@ eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
         local prefix, message, distribution, sender = arg1, arg2, arg3, arg4
         if moduleEnabled and prefix == PP_PREFIX then
             ParseAddonMessage(sender, message)
+            SavePallyAssignments()
             if frame and frame:IsVisible() then Refresh() else RefreshBuffFrame() end
         end
     elseif event == "UNIT_AURA" then

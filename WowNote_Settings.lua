@@ -36,7 +36,7 @@ local function EnsureSettings()
     if WowNoteDB.characterNoteOptions.alwaysShow == nil then WowNoteDB.characterNoteOptions.alwaysShow = false end
     WowNoteDB.social = WowNoteDB.social or {}
     if WowNoteDB.social.blockGuildInvite == nil then WowNoteDB.social.blockGuildInvite = false end
-    if WowNoteDB.social.cleanManabonkMail == nil then WowNoteDB.social.cleanManabonkMail = false end
+    if WowNoteDB.social.cleanManabonkMail == nil then WowNoteDB.social.cleanManabonkMail = true end
     WowNoteDB.minimap = WowNoteDB.minimap or {}
     if WowNoteDB.minimap.hide == nil then WowNoteDB.minimap.hide = false end
     return WowNoteDB.modules

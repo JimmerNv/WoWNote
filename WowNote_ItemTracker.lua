@@ -17,13 +17,35 @@ local function Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg)) end
 end
 
+local function CopyTable(src)
+    if type(src) ~= "table" then return nil end
+    local out = {}
+    for k, v in pairs(src) do
+        if type(v) == "table" then
+            out[k] = CopyTable(v)
+        else
+            out[k] = v
+        end
+    end
+    return out
+end
+
 local function InitDB()
     if WowNote_Internal and WowNote_Internal.InitDB then WowNote_Internal.InitDB() end
-    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
-    if type(WowNoteDB.itemTracker) ~= "table" then WowNoteDB.itemTracker = {} end
-    if type(WowNoteDB.itemTracker.trackedItems) ~= "table" then WowNoteDB.itemTracker.trackedItems = {} end
-    if type(WowNoteDB.itemTracker.hud) ~= "table" then
-        WowNoteDB.itemTracker.hud = { shown = true, locked = true, point = "CENTER", relativePoint = "CENTER", x = 260, y = -80, scale = 1.0 }
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.itemTracker) ~= "table" and type(WowNoteDB) == "table" and type(WowNoteDB.itemTracker) == "table" then
+        WowNoteCharDB.itemTracker = {}
+        if type(WowNoteDB.itemTracker.trackedItems) == "table" then
+            WowNoteCharDB.itemTracker.trackedItems = CopyTable(WowNoteDB.itemTracker.trackedItems)
+        end
+        if type(WowNoteDB.itemTracker.hud) == "table" then
+            WowNoteCharDB.itemTracker.hud = CopyTable(WowNoteDB.itemTracker.hud)
+        end
+    end
+    if type(WowNoteCharDB.itemTracker) ~= "table" then WowNoteCharDB.itemTracker = {} end
+    if type(WowNoteCharDB.itemTracker.trackedItems) ~= "table" then WowNoteCharDB.itemTracker.trackedItems = {} end
+    if type(WowNoteCharDB.itemTracker.hud) ~= "table" then
+        WowNoteCharDB.itemTracker.hud = { shown = true, locked = true, point = "CENTER", relativePoint = "CENTER", x = 260, y = -80, scale = 1.0 }
     end
 end
 
@@ -71,7 +93,7 @@ local function ExtractItemId(link)
 end
 
 local function CountItem(item)
-    if WowNote_ItemSnapshots_CountTracked then return WowNote_ItemSnapshots_CountTracked(item.itemId, item.countMode or "character") end
+    if WowNote_ItemSnapshots_CountTracked then return WowNote_ItemSnapshots_CountTracked(item.itemId, "character") end
     return 0
 end
 
@@ -89,8 +111,8 @@ local function CycleSound(item)
     item.alert.sound = item.alert.soundKey ~= "NONE"
 end
 
-local function ToggleMode(item)
-    if item.countMode == "account" then item.countMode = "character" else item.countMode = "account" end
+local function ForceCharacterMode(item)
+    if item then item.countMode = "character" end
 end
 
 local function EnsureItemDefaults(item)
@@ -99,7 +121,7 @@ local function EnsureItemDefaults(item)
     if type(item.restock) ~= "table" then item.restock = {} end
     if item.threshold == nil then item.threshold = 0 end
     if item.target == nil then item.target = item.threshold end
-    if item.countMode ~= "account" then item.countMode = "character" end
+    item.countMode = "character"
     if item.alert.enabled == nil then item.alert.enabled = true end
     if item.alert.text == nil then item.alert.text = true end
     if item.alert.sound == nil then item.alert.sound = false end
@@ -115,7 +137,7 @@ end
 local function SortedItems()
     InitDB()
     local out = {}
-    for itemId, item in pairs(WowNoteDB.itemTracker.trackedItems) do
+    for itemId, item in pairs(WowNoteCharDB.itemTracker.trackedItems) do
         if type(item) == "table" then
             EnsureItemDefaults(item)
             table.insert(out, item)
@@ -130,7 +152,7 @@ function WowNote_ItemTracker_AddItem(link, threshold, target)
     local itemId = ExtractItemId(link)
     if not itemId then Print("Could not read item id."); return end
     local name, itemLink, quality, itemLevel, minLevel, itemType, itemSubType, stackCount, equipLoc, texture = GetItemInfo(link or itemId)
-    local item = WowNoteDB.itemTracker.trackedItems[itemId] or {}
+    local item = WowNoteCharDB.itemTracker.trackedItems[itemId] or {}
     item.itemId = itemId
     item.name = name or item.name or ("Item " .. tostring(itemId))
     item.link = link or itemLink or item.link
@@ -138,7 +160,7 @@ function WowNote_ItemTracker_AddItem(link, threshold, target)
     item.threshold = tonumber(threshold) or item.threshold or 0
     item.target = tonumber(target) or item.target or item.threshold or 0
     EnsureItemDefaults(item)
-    WowNoteDB.itemTracker.trackedItems[itemId] = item
+    WowNoteCharDB.itemTracker.trackedItems[itemId] = item
     SetStatus("Tracking: " .. item.name)
     if WowNote_ItemTracker_Refresh then WowNote_ItemTracker_Refresh() end
     if WowNote_ItemTracker_RefreshHud then WowNote_ItemTracker_RefreshHud() end
@@ -160,7 +182,7 @@ local function SaveRow(row)
     item.alert.enabled = row.alertEnabled:GetChecked() and true or false
     item.alert.text = row.textEnabled:GetChecked() and true or false
     item.alert.repeatEnabled = row.repeatEnabled:GetChecked() and true or false
-    item.alert.repeatSeconds = tonumber(row.repeatSeconds:GetText()) or 300
+    item.alert.repeatSeconds = tonumber(item.alert.repeatSeconds) or 300
     item.hud.enabled = row.hudEnabled:GetChecked() and true or false
     item.restock.enabled = row.restockEnabled:GetChecked() and true or false
     item.restock.autoBuy = row.autoBuy:GetChecked() and true or false
@@ -210,8 +232,7 @@ local function CreateRow(index)
 
     row.threshold = MakeEdit(row, 52); row.threshold.bg:SetPoint("LEFT", row.count, "RIGHT", 4, 0)
     row.target = MakeEdit(row, 52); row.target.bg:SetPoint("LEFT", row.threshold.bg, "RIGHT", 6, 0)
-    row.mode = MakeButton(row, "Char", 64, 22); row.mode:SetPoint("LEFT", row.target.bg, "RIGHT", 6, 0)
-    row.remove = MakeButton(row, "Remove", 66, 22); row.remove:SetPoint("LEFT", row.mode, "RIGHT", 8, 0)
+    row.remove = MakeButton(row, "Remove", 66, 22); row.remove:SetPoint("LEFT", row.target.bg, "RIGHT", 8, 0)
 
     row.hudLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.hudLabel:SetPoint("TOPLEFT", row, "TOPLEFT", 32, -36); row.hudLabel:SetText("HUD")
@@ -230,10 +251,9 @@ local function CreateRow(index)
     row.repeatLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.repeatLabel:SetPoint("LEFT", row.sound, "RIGHT", 8, 0); row.repeatLabel:SetText("Repeat")
     row.repeatEnabled = MakeCheck(row); row.repeatEnabled:SetPoint("LEFT", row.repeatLabel, "RIGHT", 2, 0)
-    row.repeatSeconds = MakeEdit(row, 44); row.repeatSeconds.bg:SetPoint("LEFT", row.repeatEnabled, "RIGHT", 2, 0)
 
     row.restockLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    row.restockLabel:SetPoint("LEFT", row.repeatSeconds.bg, "RIGHT", 8, 0); row.restockLabel:SetText("Restock")
+    row.restockLabel:SetPoint("LEFT", row.repeatEnabled, "RIGHT", 8, 0); row.restockLabel:SetText("Restock")
     row.restockEnabled = MakeCheck(row); row.restockEnabled:SetPoint("LEFT", row.restockLabel, "RIGHT", 2, 0)
 
     row.autoLabel = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
@@ -247,20 +267,18 @@ local function CreateRow(index)
     end
     RaiseControl(row.threshold.bg); RaiseControl(row.threshold, 7)
     RaiseControl(row.target.bg); RaiseControl(row.target, 7)
-    RaiseControl(row.mode); RaiseControl(row.remove)
+    RaiseControl(row.remove)
     RaiseControl(row.hudEnabled); RaiseControl(row.alertEnabled); RaiseControl(row.textEnabled)
-    RaiseControl(row.sound); RaiseControl(row.repeatEnabled); RaiseControl(row.repeatSeconds.bg); RaiseControl(row.repeatSeconds, 7)
+    RaiseControl(row.sound); RaiseControl(row.repeatEnabled)
     RaiseControl(row.restockEnabled); RaiseControl(row.autoBuy)
 
     SetHelp(row.threshold.bg, "Minimum count", "Alert when the counted amount is below this value.")
     SetHelp(row.target.bg, "Target count", "Restock target. The restock assistant buys up to this amount when possible.")
-    SetHelp(row.mode, "Count mode", "Char = count only the current character. Acct = count all saved account snapshots.")
     SetHelp(row.hudEnabled, "HUD", "Show this item in the movable tracker HUD.")
     SetHelp(row.alertEnabled, "Alert", "Enable or disable low-count alerts for this item.")
     SetHelp(row.textEnabled, "Text alert", "Show low-count warnings in chat and the error text area.")
     SetHelp(row.sound, "Alert sound", "Click to cycle the configured alert sound.")
-    SetHelp(row.repeatEnabled, "Repeat alert", "Repeat the alert while the item remains below the minimum count.")
-    SetHelp(row.repeatSeconds.bg, "Repeat seconds", "Delay in seconds between repeated low-count alerts.")
+    SetHelp(row.repeatEnabled, "Repeat alert", "Repeat the alert while the item remains below the minimum count. Uses the default internal interval.")
     SetHelp(row.restockEnabled, "Restock", "Show this item in the merchant restock assistant when it is below target.")
     SetHelp(row.autoBuy, "Auto-buy", "When enabled, the restock module may buy this item automatically at matching merchants, subject to safety limits.")
 
@@ -268,8 +286,6 @@ local function CreateRow(index)
     row.threshold:SetScript("OnEditFocusLost", function() SaveChangedRow(row, true) end)
     row.target:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveChangedRow(row, true) end)
     row.target:SetScript("OnEditFocusLost", function() SaveChangedRow(row, true) end)
-    row.repeatSeconds:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveChangedRow(row, false) end)
-    row.repeatSeconds:SetScript("OnEditFocusLost", function() SaveChangedRow(row, false) end)
     row.hudEnabled:SetScript("OnClick", function() SaveChangedRow(row, false) end)
     row.alertEnabled:SetScript("OnClick", function() SaveChangedRow(row, true) end)
     row.textEnabled:SetScript("OnClick", function() SaveChangedRow(row, false) end)
@@ -295,10 +311,10 @@ local function CreateRow(index)
             ChatEdit_InsertLink(item.link)
         end
     end)
-    row.mode:SetScript("OnClick", function(self) ToggleMode(row.item); SaveChangedRow(row, true); WowNote_ItemTracker_Refresh() end)
+    ForceCharacterMode(row.item)
     row.sound:SetScript("OnClick", function(self) CycleSound(row.item); SaveChangedRow(row, false); WowNote_ItemTracker_Refresh() end)
     row.remove:SetScript("OnClick", function(self)
-        if row.item and row.item.itemId then WowNoteDB.itemTracker.trackedItems[row.item.itemId] = nil end
+        if row.item and row.item.itemId then WowNoteCharDB.itemTracker.trackedItems[row.item.itemId] = nil end
         WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
     end)
     rows[index] = row
@@ -319,13 +335,12 @@ function WowNote_ItemTracker_Refresh()
         row.count:SetText(tostring(CountItem(item)))
         row.threshold:SetText(tostring(item.threshold or 0))
         row.target:SetText(tostring(item.target or item.threshold or 0))
-        row.mode:SetText(item.countMode == "account" and "Acct" or "Char")
+        item.countMode = "character"
         row.hudEnabled:SetChecked(item.hud and item.hud.enabled)
         row.alertEnabled:SetChecked(item.alert and item.alert.enabled)
         row.textEnabled:SetChecked(item.alert and item.alert.text)
         row.sound:SetText((sounds[item.alert.soundKey or "RAID_WARNING"] and sounds[item.alert.soundKey or "RAID_WARNING"].label) or "Sound")
         row.repeatEnabled:SetChecked(item.alert and item.alert.repeatEnabled)
-        row.repeatSeconds:SetText(tostring((item.alert and item.alert.repeatSeconds) or 300))
         row.restockEnabled:SetChecked(item.restock and item.restock.enabled)
         row.autoBuy:SetChecked(item.restock and item.restock.autoBuy)
         row:ClearAllPoints()
@@ -338,15 +353,15 @@ end
 local function SaveHudPosition()
     InitDB()
     local point, relativeTo, relativePoint, x, y = hudFrame:GetPoint(1)
-    WowNoteDB.itemTracker.hud.point = point or "CENTER"
-    WowNoteDB.itemTracker.hud.relativePoint = relativePoint or "CENTER"
-    WowNoteDB.itemTracker.hud.x = x or 0
-    WowNoteDB.itemTracker.hud.y = y or 0
+    WowNoteCharDB.itemTracker.hud.point = point or "CENTER"
+    WowNoteCharDB.itemTracker.hud.relativePoint = relativePoint or "CENTER"
+    WowNoteCharDB.itemTracker.hud.x = x or 0
+    WowNoteCharDB.itemTracker.hud.y = y or 0
 end
 
 local function ApplyHudPosition()
     InitDB()
-    local cfg = WowNoteDB.itemTracker.hud
+    local cfg = WowNoteCharDB.itemTracker.hud
     hudFrame:ClearAllPoints()
     hudFrame:SetPoint(cfg.point or "CENTER", UIParent, cfg.relativePoint or "CENTER", cfg.x or 260, cfg.y or -80)
     hudFrame:SetScale(cfg.scale or 1.0)
@@ -361,7 +376,7 @@ local function CreateHud()
     hudFrame:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     hudFrame:SetBackdropColor(0,0,0,0.55)
     hudFrame:SetMovable(true); hudFrame:RegisterForDrag("LeftButton")
-    hudFrame:SetScript("OnDragStart", function(self) if not WowNoteDB.itemTracker.hud.locked then self:StartMoving() end end)
+    hudFrame:SetScript("OnDragStart", function(self) if not WowNoteCharDB.itemTracker.hud.locked then self:StartMoving() end end)
     hudFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing(); SaveHudPosition() end)
     ApplyHudPosition()
 end
@@ -369,16 +384,16 @@ end
 
 function WowNote_ItemTracker_SetHudShown(shown)
     InitDB(); CreateHud()
-    WowNoteDB.itemTracker.hud.shown = shown and true or false
+    WowNoteCharDB.itemTracker.hud.shown = shown and true or false
     WowNote_ItemTracker_RefreshHud()
-    Print(WowNoteDB.itemTracker.hud.shown and "Tracker HUD shown." or "Tracker HUD hidden.")
+    Print(WowNoteCharDB.itemTracker.hud.shown and "Tracker HUD shown." or "Tracker HUD hidden.")
 end
 
 function WowNote_ItemTracker_SetHudLocked(locked)
     InitDB(); CreateHud()
-    WowNoteDB.itemTracker.hud.locked = locked and true or false
-    hudFrame:EnableMouse(not WowNoteDB.itemTracker.hud.locked)
-    if WowNoteDB.itemTracker.hud.locked then
+    WowNoteCharDB.itemTracker.hud.locked = locked and true or false
+    hudFrame:EnableMouse(not WowNoteCharDB.itemTracker.hud.locked)
+    if WowNoteCharDB.itemTracker.hud.locked then
         hudFrame:SetBackdropColor(0,0,0,0.25)
         Print("Tracker HUD locked.")
     else
@@ -389,7 +404,7 @@ end
 
 function WowNote_ItemTracker_RefreshHud()
     InitDB(); CreateHud()
-    local cfg = WowNoteDB.itemTracker.hud
+    local cfg = WowNoteCharDB.itemTracker.hud
     if not cfg.shown then hudFrame:Hide(); return end
     ApplyHudPosition()
     hudFrame:EnableMouse(not cfg.locked)
@@ -443,7 +458,7 @@ end
 
 function WowNote_ItemTracker_Evaluate(force)
     InitDB()
-    for _, item in pairs(WowNoteDB.itemTracker.trackedItems) do
+    for _, item in pairs(WowNoteCharDB.itemTracker.trackedItems) do
         if type(item) == "table" then
             EnsureItemDefaults(item)
             local count = CountItem(item)
@@ -495,10 +510,10 @@ local function CreateUI()
 
     local header = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     header:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -108)
-    header:SetText("Item                         Count     Min     Target   Mode       Remove")
+    header:SetText("Item                         Count     Min     Target      Remove")
     local header2 = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     header2:SetPoint("TOPLEFT", frame, "TOPLEFT", 52, -121)
-    header2:SetText("Second row: HUD, alert, text, sound, repeat interval, restock and auto-buy")
+    header2:SetText("Second row: HUD, alert, text, sound, repeat toggle, restock and auto-buy")
 
     local bg = CreateFrame("Frame", nil, frame)
     bg:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -132); bg:SetWidth(770); bg:SetHeight(368)

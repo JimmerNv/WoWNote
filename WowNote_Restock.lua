@@ -21,9 +21,12 @@ end
 
 local function InitDB()
     if WowNote_Internal and WowNote_Internal.InitDB then WowNote_Internal.InitDB() end
-    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
-    if type(WowNoteDB.itemTracker) ~= "table" then WowNoteDB.itemTracker = {} end
-    if type(WowNoteDB.itemTracker.trackedItems) ~= "table" then WowNoteDB.itemTracker.trackedItems = {} end
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.itemTracker) ~= "table" and type(WowNoteDB) == "table" and type(WowNoteDB.itemTracker) == "table" then
+        WowNoteCharDB.itemTracker = WowNoteDB.itemTracker
+    end
+    if type(WowNoteCharDB.itemTracker) ~= "table" then WowNoteCharDB.itemTracker = {} end
+    if type(WowNoteCharDB.itemTracker.trackedItems) ~= "table" then WowNoteCharDB.itemTracker.trackedItems = {} end
 end
 
 local function ExtractItemId(link)
@@ -196,7 +199,7 @@ function WowNote_Restock_CheckMerchant()
     pendingBuys = {}
     if not merchantOpen then if frame then frame:Hide() end; return end
     local merchant = MerchantItemsById()
-    for itemId, item in pairs(WowNoteDB.itemTracker.trackedItems) do
+    for itemId, item in pairs(WowNoteCharDB.itemTracker.trackedItems) do
         if type(item) == "table" and type(item.restock) == "table" and item.restock.enabled then
             local m = merchant[tonumber(itemId)]
             if m then

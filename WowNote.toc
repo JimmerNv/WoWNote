@@ -2,7 +2,7 @@
 ## Title: Titan Panel [|cffeda55fWowNote|r]
 ## Notes: Account-wide Markdown notes with GUI, GUIDs, item links, talent planner and raid LFM planner for WoW 3.3.5a
 ## Author: Johannes / ChatGPT
-## Version: 1.14.20
+## Version: 1.14.24
 ## SavedVariables: WowNoteDB, WowNotePostal3DB
 ## SavedVariablesPerCharacter: WowNoteCharDB
 ## OptionalDeps: Titan, PallyPower, Ace3
@@ -20,24 +20,7 @@ WowNote_ItemTracker.lua
 WowNote_Restock.lua
 WowNote_PallyPowerCompat.lua
 
-# Embedded WowNotePostal / Postal mail tools
-Postal\Libs\LibStub\LibStub.lua
-Postal\Libs\CallbackHandler-1.0\CallbackHandler-1.0.xml
-Postal\Libs\AceAddon-3.0\AceAddon-3.0.xml
-Postal\Libs\AceEvent-3.0\AceEvent-3.0.xml
-Postal\Libs\AceDB-3.0\AceDB-3.0.xml
-Postal\Libs\AceHook-3.0\AceHook-3.0.xml
-Postal\Libs\AceLocale-3.0\AceLocale-3.0.xml
-Postal\Localization.lua
-Postal\Postal.lua
-Postal\Modules\Express.lua
-Postal\Modules\OpenAll.lua
-Postal\Modules\Wire.lua
-Postal\Modules\Select.lua
-Postal\Modules\TradeBlock.lua
-Postal\Modules\Rake.lua
-Postal\Modules\BlackBook.lua
-Postal\Modules\DoNotWant.lua
+WowNote_PostalLite.lua
 WowNote_RaidPlanner_Core.lua
 WowNote_RaidPlanner_Roster.lua
 WowNote_RaidPlanner_UI.lua

@@ -52,6 +52,7 @@ local function InitDB()
     WowNoteDB.tacticalMaps = WowNoteDB.tacticalMaps or {}
     WowNoteDB.raidPlannerPresets = WowNoteDB.raidPlannerPresets or {}
     WowNoteDB.talentPlans = WowNoteDB.talentPlans or {}
+    WowNoteCharDB = WowNoteCharDB or {}
 end
 
 local function CountTable(t)
@@ -227,8 +228,8 @@ local function GetCategories()
     add("raidIds", "Raid IDs", items)
 
     items = {}
-    if type(WowNoteDB.itemTracker) == "table" and CountTable(WowNoteDB.itemTracker) > 0 then
-        table.insert(items, BuildItem("itemTracker", "itemTracker", "Tracker / Restock data", WowNoteDB.itemTracker))
+    if type(WowNoteCharDB.itemTracker) == "table" and CountTable(WowNoteCharDB.itemTracker) > 0 then
+        table.insert(items, BuildItem("itemTracker", "itemTracker", "Tracker / Restock data (current character)", WowNoteCharDB.itemTracker))
     end
     add("tracker", "Tracker / Restock", items)
 
@@ -294,8 +295,9 @@ function WowNote_SaveTransferredDataItem(item, sender)
         WowNoteDB.raidIds = data
         return true, "Imported raid ID data."
     elseif item.type == "itemTracker" then
-        WowNoteDB.itemTracker = data
-        return true, "Imported tracker/restock data."
+        WowNoteCharDB = WowNoteCharDB or {}
+        WowNoteCharDB.itemTracker = data
+        return true, "Imported tracker/restock data for this character."
     elseif item.type == "bankSnapshots" then
         WowNoteDB.bankSnapshots = data
         return true, "Imported bank snapshots."
