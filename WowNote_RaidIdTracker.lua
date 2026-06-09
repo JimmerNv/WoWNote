@@ -1,5 +1,5 @@
 local ADDON_NAME = "WowNote"
-local MODULE_VERSION = "1.10.27"
+local MODULE_VERSION = "1.10.29"
 
 local RI = {}
 WowNoteRaidIdTracker = RI
@@ -13,6 +13,7 @@ local scanFrame = CreateFrame("Frame", "WowNoteRaidIdTrackerEventFrame")
 local pendingScan = false
 local ScheduleScan
 local MergePostedRaidIdData
+local RefreshBossEditor
 
 local function Internal()
     return WowNote_Internal or {}
@@ -423,6 +424,7 @@ local function ToggleSelectedBossKill(bossName)
         statusText:SetText((killed and "Marked killed: " or "Cleared kill: ") .. tostring(CanonicalBossName(bossName)))
     end
     if RI.RefreshUI then RI.RefreshUI() end
+    if RefreshBossEditor then RefreshBossEditor() end
 end
 
 local function GetCurrentRaidContext()
@@ -1109,24 +1111,48 @@ function RI.RefreshUI()
         end
     end
 
-    if frame.bossButtons then
+    if frame.editBossButton then
         local lock = selectedRaidIndex and raids[selectedRaidIndex]
         local order = lock and INSTANCE_BOSS_ORDER[NormalizeBossName(lock.name or "")] or nil
-        local source = order or {}
-        local used = {}
-        local i
-        for i = 1, 12 do
-            local button = frame.bossButtons[i]
-            local bossName = source[i]
-            if button and lock and bossName then
-                local killed = IsBossKilledInLock(lock, bossName)
-                button.bossName = bossName
-                button:SetText((killed and "[x] " or "[ ] ") .. tostring(bossName))
-                button:Show()
-            elseif button then
-                button.bossName = nil
-                button:Hide()
+        if lock and order then
+            frame.editBossButton:Show()
+        else
+            frame.editBossButton:Hide()
+            if frame.bossEditor then frame.bossEditor:Hide() end
+        end
+    end
+
+    if RefreshBossEditor then RefreshBossEditor() end
+end
+
+RefreshBossEditor = function()
+    if not frame or not frame.bossEditor then return end
+    local lock = GetSelectedLock()
+    local order = lock and INSTANCE_BOSS_ORDER[NormalizeBossName(lock.name or "")] or nil
+    if not frame.bossEditor:IsShown() then return end
+    if not lock or not order then
+        frame.bossEditor:Hide()
+        return
+    end
+
+    frame.bossEditor.title:SetText("Edit killed bosses: " .. tostring(lock.name or "Raid"))
+    for i = 1, 12 do
+        local button = frame.bossEditor.buttons[i]
+        local bossName = order[i]
+        if button and bossName then
+            local killed = IsBossKilledInLock(lock, bossName)
+            button.bossName = bossName
+            button:SetChecked(killed and true or false)
+            if button.text then
+                button.text:SetText(tostring(bossName))
+                button.text:Show()
             end
+            button:Show()
+        elseif button then
+            button.bossName = nil
+            button:SetChecked(false)
+            button:Hide()
+            if button.text then button.text:Hide() end
         end
     end
 end
@@ -1241,20 +1267,62 @@ local function CreateUI()
     frame.detailsText:SetJustifyV("TOP")
     frame.detailsText:SetText("Select a raid ID to see saved-with details.")
 
-    frame.bossButtons = {}
+    frame.editBossButton = MakeButton(frame, "Edit Kills", 88, 20)
+    frame.editBossButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 720, -386)
+    frame.editBossButton:SetScript("OnClick", function()
+        if not frame.bossEditor then return end
+        frame.bossEditor:Show()
+        RefreshBossEditor()
+    end)
+    frame.editBossButton:Hide()
+
+    frame.bossEditor = CreateFrame("Frame", nil, frame)
+    frame.bossEditor:SetSize(640, 142)
+    frame.bossEditor:SetPoint("CENTER", frame, "CENTER", 70, -80)
+    frame.bossEditor:SetFrameStrata("TOOLTIP")
+    frame.bossEditor:SetBackdrop({
+        bgFile = "Interface\Tooltips\UI-Tooltip-Background",
+        edgeFile = "Interface\Tooltips\UI-Tooltip-Border",
+        tile = true, tileSize = 16, edgeSize = 14,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+    frame.bossEditor:SetBackdropColor(0.03, 0.02, 0.01, 0.98)
+    frame.bossEditor:SetBackdropBorderColor(0.95, 0.75, 0.35, 1)
+    frame.bossEditor:Hide()
+
+    frame.bossEditor.title = frame.bossEditor:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    frame.bossEditor.title:SetPoint("TOPLEFT", frame.bossEditor, "TOPLEFT", 12, -10)
+    frame.bossEditor.title:SetText("Edit killed bosses")
+
+    local closeBossEditor = MakeButton(frame.bossEditor, "Done", 56, 18)
+    closeBossEditor:SetPoint("TOPRIGHT", frame.bossEditor, "TOPRIGHT", -10, -8)
+    closeBossEditor:SetScript("OnClick", function() frame.bossEditor:Hide() end)
+
+    frame.bossEditor.buttons = {}
     for i = 1, 12 do
-        local bossButton = MakeButton(frame, "Boss", 132, 20)
-        local col = (i - 1) % 4
-        local row = math.floor((i - 1) / 4)
-        bossButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 240 + (col * 142), -416 - (row * 22))
+        local bossButton = CreateFrame("CheckButton", nil, frame.bossEditor, "UICheckButtonTemplate")
+        bossButton:SetSize(22, 22)
+        local col = (i - 1) % 3
+        local row = math.floor((i - 1) / 3)
+        bossButton:SetPoint("TOPLEFT", frame.bossEditor, "TOPLEFT", 14 + (col * 205), -36 - (row * 24))
         bossButton.index = i
+        bossButton.text = frame.bossEditor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        bossButton.text:SetPoint("LEFT", bossButton, "RIGHT", 2, 0)
+        bossButton.text:SetWidth(178)
+        bossButton.text:SetJustifyH("LEFT")
         bossButton:SetScript("OnClick", function(self)
             if self.bossName then
-                ToggleSelectedBossKill(self.bossName)
+                SetManualBossKill(GetSelectedLock(), self.bossName, self:GetChecked() and true or false)
+                if statusText then
+                    statusText:SetText(((self:GetChecked() and "Marked killed: ") or "Cleared kill: ") .. tostring(CanonicalBossName(self.bossName)))
+                end
+                RI.RefreshUI()
+                RefreshBossEditor()
             end
         end)
         bossButton:Hide()
-        frame.bossButtons[i] = bossButton
+        bossButton.text:Hide()
+        frame.bossEditor.buttons[i] = bossButton
     end
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

@@ -91,24 +91,32 @@ local function StopWorker(doneMessage)
     end
 end
 
+local function AutoLootOneMail(index)
+    if not AutoLootMailItem then return false end
+    local ok = pcall(AutoLootMailItem, index)
+    return ok
+end
+
 local function TakeOneInboxItem(index, itemCount)
     if not TakeInboxItem then return false end
 
     -- Prefer actually visible attachment slots. Header itemCount can be stale
     -- on 3.3.5a/Warmane AH mail after a take/reindex cycle.
     local slot
-    for slot = GetMaxAttachmentSlots(), 1, -1 do
+    for slot = 1, GetMaxAttachmentSlots() do
         if SlotHasAttachment(index, slot) then
-            TakeInboxItem(index, slot)
-            return true
+            local ok = pcall(TakeInboxItem, index, slot)
+            return ok
         end
     end
 
     -- Fallback for cores where GetInboxItem/GetInboxItemLink does not expose
     -- the slot reliably, but header.itemCount still says there are items.
-    for slot = (tonumber(itemCount) or 0), 1, -1 do
-        TakeInboxItem(index, slot)
-        return true
+    -- AH-returned items on 3.3.5a are commonly in slot 1, so try in
+    -- ascending order instead of starting at a possibly non-existent slot.
+    for slot = 1, (tonumber(itemCount) or 0) do
+        local ok = pcall(TakeInboxItem, index, slot)
+        if ok then return true end
     end
     return false
 end
@@ -122,13 +130,24 @@ local function ProcessOneMailboxAction()
     for index = count, 1, -1 do
         local header = GetHeader(index)
         if header and (header.codAmount or 0) == 0 then
-            if (header.money or 0) > 0 and TakeInboxMoney then
-                TakeInboxMoney(index)
+            local itemCount = EffectiveItemCount(index, header)
+
+            -- Prefer the native mailbox auto-loot helper when present. It is
+            -- more reliable for Auction House item mails on 3.3.5a/Warmane
+            -- than mixing stale header data with manual TakeInboxItem slots.
+            if ((header.money or 0) > 0 or itemCount > 0) and AutoLootOneMail(index) then
                 openAllLooted = openAllLooted + 1
                 return true
             end
 
-            local itemCount = EffectiveItemCount(index, header)
+            if (header.money or 0) > 0 and TakeInboxMoney then
+                local ok = pcall(TakeInboxMoney, index)
+                if ok then
+                    openAllLooted = openAllLooted + 1
+                    return true
+                end
+            end
+
             if itemCount > 0 and TakeOneInboxItem(index, itemCount) then
                 openAllLooted = openAllLooted + 1
                 return true

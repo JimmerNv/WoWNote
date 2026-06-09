@@ -1,3 +1,16 @@
+# v1.14.41
+
+- Reworked PostalLite Open All for Auction House item mails.
+- Prefer native AutoLootMailItem when available, falling back to TakeInboxMoney/TakeInboxItem.
+- Try attachment slots in ascending order so AH-returned items in slot 1 are handled first.
+- Keep stale-index retries and empty-letter cleanup for delayed 3.3.5a mailbox updates.
+
+## 1.14.39
+
+- Restored the Raid ID detail area to the previous read-only display by default.
+- Moved manual boss kill toggles behind a dedicated "Edit Kills" button.
+- Added an inline boss editor panel that opens only when explicitly requested and can be closed with "Done".
+
 ## 1.14.38
 
 - PallyBuffs: pre-binds the main cast button and class-row buttons while out of combat so they remain usable in combat.
