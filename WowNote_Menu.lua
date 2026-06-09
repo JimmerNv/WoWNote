@@ -219,6 +219,9 @@ function WowNote_BuildSideMenu(parent, makeButton)
             { text = "Raid IDs", tooltip = "Open the raid ID tracker.", func = function() if WowNote_OpenRaidIdTracker then WowNote_OpenRaidIdTracker() else Print("Raid ID tracker is not loaded.") end end },
             { text = "Tracker", tooltip = "Open the item tracker.", func = function() if WowNote_OpenItemTracker then WowNote_OpenItemTracker() else Print("Tracker module is not loaded.") end end },
             { text = "Restock", tooltip = "Open restock rules.", func = function() if WowNote_OpenRestock then WowNote_OpenRestock() else Print("Restock module is not loaded.") end end },
+            { text = "Loot Tools", tooltip = "Open auto roll, auto sell, and auto repair settings.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("roll") elseif WowNote_OpenAutoLootRoller then WowNote_OpenAutoLootRoller() else Print("Loot Tools module is not loaded.") end end },
+            { text = "Auto Sell", tooltip = "Open auto sell settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("sell") elseif WowNote_OpenAutoSell then WowNote_OpenAutoSell() else Print("Auto Sell module is not loaded.") end end },
+            { text = "Auto Repair", tooltip = "Open auto repair settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("repair") elseif WowNote_OpenAutoRepair then WowNote_OpenAutoRepair() else Print("Auto Repair module is not loaded.") end end },
         })
     end, "Open character-related utility tools.")
 

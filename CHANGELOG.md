@@ -1,3 +1,44 @@
+## 1.14.38
+
+- PallyBuffs: pre-binds the main cast button and class-row buttons while out of combat so they remain usable in combat.
+- PallyBuffs: avoids clearing or rewriting protected secure spell/unit attributes during combat.
+
+## 1.14.36
+
+- Fixed PostalLite Open All still stopping on Auction House mailboxes.
+- Open All now also deletes safe empty letters during the worker run so looted AH mail does not leave a full mailbox behind.
+- Added repeated inbox refresh calls and longer idle polling for stale Warmane/3.3.5a mailbox updates.
+
+# 1.14.35
+
+- Added an ICC live-combat fallback for Deathbringer Saurfang.
+- As soon as combat log activity involving Saurfang is seen inside ICC, the tracker marks the three previous encounters as completed: Lord Marrowgar, Lady Deathwhisper, and Icecrown Gunship Battle.
+- This covers the case where the raid reaches/pulls Saurfang before the server exposes reliable saved encounter data for Gunship.
+
+
+### 1.14.32
+
+- Fixed Raid ID Tracker progress detection for Icecrown Gunship Battle.
+- Added Gunship/Luftschiff aliases and an ICC fallback boss order so progress-based saved instance data can mark Gunship as killed even when no normal boss death event fires.
+
+# 1.14.29
+
+## 1.14.32
+
+- Restored Loot Tools access in the side menu under Character Tools.
+- Added direct menu entries for Loot Tools, Auto Sell, and Auto Repair.
+
+
+- Added an `Assign` button to the top of the PallyBuffs overlay.
+- The overlay button opens the full PallyBuffs distribution menu directly without going through the main WoWNote UI.
+
+# 1.14.26
+
+- Fixed PostalLite Open All regression where a full AH mailbox could be reported as having no lootable mail.
+- Open All now starts the rescan worker even when the first header scan is stale.
+- Attachment detection now checks visible attachment slots via GetInboxItemLink/GetInboxItem instead of trusting only header itemCount.
+- Attachment taking now prefers real visible slots and falls back to header itemCount only when needed.
+
 ## 1.14.24
 
 - Fixed a startup error in PallyPower compatibility where saved assignment loading called `EnsurePally` before the local upvalue was declared.
@@ -25,6 +66,12 @@
 - Deletes The Mischief Maker from bags first, then deletes the emptied Manabonk mail after the inbox confirms the attachment is gone.
 
 # Changelog
+
+## 1.14.37
+
+- PallyBuffs overlay now tracks partial class buffs, for example 2/3 druids buffed, and keeps the class row red until every unit of that class has the assigned blessing.
+- Raid ID Tracker adds clickable manual boss kill toggles for the selected raid ID.
+
 
 ## 1.14.20
 

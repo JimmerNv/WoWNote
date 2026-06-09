@@ -22,6 +22,19 @@ local CLASS_NAMES = {
     [11] = "Pet",
 }
 
+local CLASS_ID_TO_TOKEN = {
+    [1] = "WARRIOR",
+    [2] = "ROGUE",
+    [3] = "PRIEST",
+    [4] = "DRUID",
+    [5] = "PALADIN",
+    [6] = "HUNTER",
+    [7] = "MAGE",
+    [8] = "WARLOCK",
+    [9] = "SHAMAN",
+    [10] = "DEATHKNIGHT",
+}
+
 local BLESSING_NAMES = {
     [0] = "None",
     [1] = "Wisdom",
@@ -32,7 +45,7 @@ local BLESSING_NAMES = {
 
 local DEFAULT_BLESSING_ICONS = {
     [1] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofWisdom",
-    [2] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofKings",
+    [2] = "Interface\\Icons\\Ability_Warrior_BattleShout",
     [3] = "Interface\\Icons\\Spell_Magic_GreaterBlessingofKings",
     [4] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofSanctuary",
 }
@@ -104,11 +117,14 @@ local freeAssignButton
 local buffFrameButton
 local buffFrame
 local buffFrameButtons = {}
+local buffFrameRows = {}
 local autoBuffedList = {}
 local previousAutoBuffedUnit
 local rows = {}
 local Refresh
 local RefreshBuffFrame
+local UpdateCastButtonVisual
+local UpdateSecureCastButton
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then
@@ -524,7 +540,35 @@ local function GetClassIcon(id)
     if PallyPower and PallyPower.ClassIcons and PallyPower.ClassIcons[id] and PallyPower.ClassIcons[id] ~= "" then
         return PallyPower.ClassIcons[id]
     end
-    return DEFAULT_CLASS_ICONS[id]
+    return nil
+end
+
+local function SetClassIconVisual(texture, classId)
+    if not texture then return end
+    classId = tonumber(classId) or 0
+    local customIcon = GetClassIcon(classId)
+    if customIcon then
+        texture:SetTexture(customIcon)
+        texture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        texture:Show()
+        return
+    end
+    if classId == 11 then
+        texture:SetTexture("Interface\\Icons\\Ability_Hunter_Pet_Bear")
+        texture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        texture:Show()
+        return
+    end
+    local token = CLASS_ID_TO_TOKEN[classId]
+    if CLASS_ICON_TCOORDS and token and CLASS_ICON_TCOORDS[token] then
+        texture:SetTexture("Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes")
+        texture:SetTexCoord(unpack(CLASS_ICON_TCOORDS[token]))
+        texture:Show()
+        return
+    end
+    texture:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    texture:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    texture:Show()
 end
 
 
@@ -571,10 +615,11 @@ local function UnitClassId(unit)
     return CLASS_TOKEN_TO_ID[token or ""]
 end
 
-local function AddBuffScanUnit(units, unit)
-    if not UnitExists or not UnitExists(unit) or not UnitIsPlayer or not UnitIsPlayer(unit) then return end
-    local classId = UnitClassId(unit)
+local function AddBuffScanUnit(units, unit, forcedClassId)
+    if not UnitExists or not UnitExists(unit) then return end
+    local classId = forcedClassId or UnitClassId(unit)
     if not classId then return end
+    if not forcedClassId and UnitIsPlayer and not UnitIsPlayer(unit) then return end
     local name = UnitName(unit)
     if not name or name == "" then return end
     table.insert(units, { unit = unit, name = name, classId = classId })
@@ -583,12 +628,19 @@ end
 local function GetGroupUnitsForBuffScan()
     local units = {}
     AddBuffScanUnit(units, "player")
+    AddBuffScanUnit(units, "pet", 11)
     if GetNumRaidMembers and GetNumRaidMembers() > 0 then
         local i
-        for i = 1, GetNumRaidMembers() do AddBuffScanUnit(units, "raid" .. i) end
+        for i = 1, GetNumRaidMembers() do
+            AddBuffScanUnit(units, "raid" .. i)
+            AddBuffScanUnit(units, "raidpet" .. i, 11)
+        end
     elseif GetNumPartyMembers then
         local i
-        for i = 1, GetNumPartyMembers() do AddBuffScanUnit(units, "party" .. i) end
+        for i = 1, GetNumPartyMembers() do
+            AddBuffScanUnit(units, "party" .. i)
+            AddBuffScanUnit(units, "partypet" .. i, 11)
+        end
     end
     return units
 end
@@ -597,11 +649,12 @@ local function FindUnitBuffRemaining(unit, blessingId)
     if not UnitBuff then return nil end
     local spellName = GetBlessingSpellName(blessingId)
     if not spellName or spellName == "" then return nil end
+    local shortName = BLESSING_NAMES[blessingId] or ""
     local i = 1
     while true do
         local name, _, _, _, _, duration, expirationTime = UnitBuff(unit, i)
         if not name then break end
-        if name == spellName or string.find(name, BLESSING_NAMES[blessingId] or "", 1, true) then
+        if name == spellName or (shortName ~= "" and string.find(name, shortName, 1, true)) then
             if expirationTime and expirationTime > 0 and GetTime then
                 return expirationTime - GetTime()
             end
@@ -611,6 +664,20 @@ local function FindUnitBuffRemaining(unit, blessingId)
         if i > 40 then break end
     end
     return nil
+end
+
+local function BuildMissingNamesText(names, limit)
+    if type(names) ~= "table" or #names == 0 then return "" end
+    limit = tonumber(limit or 3) or 3
+    local parts = {}
+    local i
+    for i = 1, math.min(#names, limit) do
+        table.insert(parts, tostring(names[i]))
+    end
+    if #names > limit then
+        table.insert(parts, "+" .. tostring(#names - limit))
+    end
+    return table.concat(parts, ", ")
 end
 
 local function FormatRemaining(seconds)
@@ -722,22 +789,100 @@ local function SelectAutoBuffTask()
     return bestTask, tasks
 end
 
-local function PrepareAutoBuffButton(button, mousebutton)
-    -- Mirrors PallyPower's secure pattern: PreClick computes the spell/unit and
-    -- writes only SecureActionButton attributes. No TargetUnit/CastSpell path.
+local function GetUnitsByClassForBuffScan()
+    local byClass = {}
+    local units = GetGroupUnitsForBuffScan()
+    local _, unitInfo
+    for _, unitInfo in ipairs(units) do
+        byClass[unitInfo.classId] = byClass[unitInfo.classId] or {}
+        table.insert(byClass[unitInfo.classId], unitInfo)
+    end
+    return byClass
+end
+
+local function BuildClassBuffStatus(classId)
+    local player = UnitName("player")
+    if not player or not state.assignments[player] then return nil end
+    classId = tonumber(classId) or 0
+    local blessingId = tonumber(state.assignments[player][classId]) or 0
+    if blessingId <= 0 or blessingId > 4 then return nil end
+
+    local byClass = GetUnitsByClassForBuffScan()
+    local classUnits = byClass[classId] or {}
+    local targetUnit, targetName
+    local minRemaining = nil
+    local missing = false
+    local hasUnit = false
+    local totalCount = 0
+    local buffedCount = 0
+    local missingCount = 0
+    local missingNames = {}
+    local _, unitInfo
+
+    for _, unitInfo in ipairs(classUnits) do
+        hasUnit = true
+        totalCount = totalCount + 1
+        local remaining = FindUnitBuffRemaining(unitInfo.unit, blessingId)
+        if not remaining then
+            missing = true
+            missingCount = missingCount + 1
+            table.insert(missingNames, unitInfo.name or unitInfo.unit or "?")
+            -- Keep the first missing unit as cast target. This is the important
+            -- PallyPower-like behavior for partial class buffs, e.g. 2/3 druids.
+            if not targetUnit then
+                targetUnit = unitInfo.unit
+                targetName = unitInfo.name
+                minRemaining = nil
+            end
+        else
+            buffedCount = buffedCount + 1
+            if not missing and (not minRemaining or remaining < minRemaining) then
+                minRemaining = remaining
+                targetUnit = unitInfo.unit
+                targetName = unitInfo.name
+            end
+        end
+    end
+
+    return {
+        unit = targetUnit,
+        targetName = targetName,
+        classId = classId,
+        className = CLASS_NAMES[classId] or "Class",
+        blessingId = blessingId,
+        blessingName = BLESSING_NAMES[blessingId] or "Blessing",
+        spellName = GetBlessingSpellName(blessingId),
+        remaining = minRemaining,
+        missing = missing,
+        hasUnit = hasUnit,
+        totalCount = totalCount,
+        buffedCount = buffedCount,
+        missingCount = missingCount,
+        missingNames = missingNames,
+        partial = hasUnit and missingCount > 0 and buffedCount > 0,
+    }
+end
+
+local function SelectClassBuffTask(classId)
+    local status = BuildClassBuffStatus(classId)
+    if not status or not status.spellName or not status.unit then return nil end
+    if not IsBuffTaskInRange(status) then return nil end
+    return status
+end
+
+local function SetSecureBuffAttributes(button, task)
     if not button then return nil end
-    if InCombatLockdown and InCombatLockdown() then return nil end
+    -- SecureActionButton attributes must be prepared while out of combat. In combat
+    -- the existing spell/unit attributes stay in place so the button can still cast.
+    if InCombatLockdown and InCombatLockdown() then
+        return button.wowNotePreparedTask
+    end
 
-    local task = SelectAutoBuffTask()
     button.wowNotePreparedTask = task
-
     if task and task.spellName and task.unit and UnitExists and UnitExists(task.unit) then
+        button:SetAttribute("type", "spell")
         button:SetAttribute("unit", task.unit)
         button:SetAttribute("spell", task.spellName)
-        if time then
-            autoBuffedList[task.targetName or task.unit] = time()
-        end
-        previousAutoBuffedUnit = { name = task.targetName or task.unit, unit = task.unit }
         return task
     end
 
@@ -746,14 +891,52 @@ local function PrepareAutoBuffButton(button, mousebutton)
     return nil
 end
 
+local function PrepareAutoBuffButton(button, mousebutton)
+    -- Out of combat this computes and writes the next secure spell/unit pair. In
+    -- combat it deliberately reuses the already prepared attributes, because the
+    -- 3.3.5 secure environment blocks changing protected action attributes there.
+    if not button then return nil end
+
+    if InCombatLockdown and InCombatLockdown() then
+        local prepared = button.wowNotePreparedTask
+        if prepared then
+            if time then
+                autoBuffedList[prepared.targetName or prepared.unit] = time()
+            end
+            previousAutoBuffedUnit = { name = prepared.targetName or prepared.unit, unit = prepared.unit }
+        end
+        return prepared
+    end
+
+    local task
+    if button.wowNoteClassId then
+        task = SelectClassBuffTask(button.wowNoteClassId)
+    else
+        task = SelectAutoBuffTask()
+    end
+    SetSecureBuffAttributes(button, task)
+    if UpdateCastButtonVisual and not button.wowNoteClassId then
+        UpdateCastButtonVisual(task)
+    end
+
+    if task and task.spellName and task.unit and UnitExists and UnitExists(task.unit) then
+        if time then
+            autoBuffedList[task.targetName or task.unit] = time()
+        end
+        previousAutoBuffedUnit = { name = task.targetName or task.unit, unit = task.unit }
+        return task
+    end
+
+    return nil
+end
+
 local function ClearAutoBuffButton(button)
-    -- PallyPower clears the secure action target after the click. Do the same so
-    -- stale spell/unit attributes cannot fire from a later tainted path.
+    -- Do not clear protected attributes in combat; that would disable in-combat
+    -- buffing and may be blocked by the secure frame rules. Out of combat we keep
+    -- the attributes prepared by RefreshBuffFrame instead of wiping them after
+    -- every click.
     if not button then return end
     if InCombatLockdown and InCombatLockdown() then return end
-    button:SetAttribute("unit", nil)
-    button:SetAttribute("spell", nil)
-    button.wowNotePreparedTask = nil
 end
 
 local function CastBuffTask(task)
@@ -1152,8 +1335,8 @@ local function CreateBuffFrame()
     if buffFrame then return end
 
     buffFrame = CreateFrame("Frame", "WowNotePallyPowerBuffFrame", UIParent)
-    buffFrame:SetWidth(238)
-    buffFrame:SetHeight(118)
+    buffFrame:SetWidth(156)
+    buffFrame:SetHeight(408)
     buffFrame:SetPoint("CENTER", UIParent, "CENTER", 0, -300)
     buffFrame:SetMovable(true)
     buffFrame:EnableMouse(true)
@@ -1183,6 +1366,15 @@ local function CreateBuffFrame()
         UpdateBuffFrameButton()
         buffFrame:Hide()
     end)
+
+    buffFrame.assignButton = MakeButton(buffFrame, "Assign", 60, 20)
+    buffFrame.assignButton:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 78, -6)
+    buffFrame.assignButton:SetScript("OnClick", function()
+        if WowNote_OpenPallyBuffs then
+            WowNote_OpenPallyBuffs()
+        end
+    end)
+    AddTooltip(buffFrame.assignButton, "Assignments", "Opens the PallyBuffs distribution menu directly.")
 
     buffFrame.castButton = CreateFrame("Button", "WowNotePallyBuffsSecureCastButton", buffFrame, "SecureActionButtonTemplate")
     buffFrame.castButton:SetWidth(42)
@@ -1218,19 +1410,76 @@ local function CreateBuffFrame()
             SetStatus("No missing or expiring PallyBuffs found.")
         end
         ClearAutoBuffButton(self)
+        local nextTask = SelectAutoBuffTask()
+        buffFrame.nextTask = nextTask
+        UpdateSecureCastButton(nextTask)
+        UpdateCastButtonVisual(nextTask)
+        buffFrame.elapsed = 1.0
     end)
 
     buffFrame.summary = buffFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     buffFrame.summary:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 64, -34)
-    buffFrame.summary:SetWidth(158)
+    buffFrame.summary:SetWidth(82)
     buffFrame.summary:SetJustifyH("LEFT")
     buffFrame.summary:SetText("Scanning...")
 
     buffFrame.popup = buffFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     buffFrame.popup:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 12, -78)
-    buffFrame.popup:SetWidth(212)
+    buffFrame.popup:SetWidth(132)
     buffFrame.popup:SetJustifyH("LEFT")
     buffFrame.popup:SetText("")
+    buffFrame.popup:Hide()
+
+    buffFrameRows = {}
+    local classId
+    for classId = 1, MAX_CLASSES do
+        local row = CreateFrame("Button", "WowNotePallyBuffsClassRow" .. classId, buffFrame, "SecureActionButtonTemplate")
+        row:SetWidth(132)
+        row:SetHeight(26)
+        row:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 12, -76 - ((classId - 1) * 29))
+        row:RegisterForClicks("AnyUp")
+        row:SetAttribute("type", "spell")
+        row:SetAttribute("unit", nil)
+        row:SetAttribute("spell", nil)
+        row.wowNoteClassId = classId
+        row:SetBackdrop({
+            bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            tile = true,
+            tileSize = 8,
+            edgeSize = 10,
+            insets = { left = 2, right = 2, top = 2, bottom = 2 }
+        })
+        row:SetBackdropColor(0.0, 0.20, 0.02, 0.92)
+        row:SetBackdropBorderColor(0.2, 0.8, 0.25, 1)
+        row:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+        row.classIcon = row:CreateTexture(nil, "ARTWORK")
+        row.classIcon:SetPoint("LEFT", row, "LEFT", 3, 0)
+        row.classIcon:SetWidth(22)
+        row.classIcon:SetHeight(22)
+        row.classIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        row.buffIcon = row:CreateTexture(nil, "ARTWORK")
+        row.buffIcon:SetPoint("LEFT", row.classIcon, "RIGHT", 3, 0)
+        row.buffIcon:SetWidth(22)
+        row.buffIcon:SetHeight(22)
+        row.buffIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+        row.timeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.timeText:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+        row.timeText:SetJustifyH("RIGHT")
+        row.timeText:SetText("")
+        row:SetScript("PreClick", function(self, mouseButton)
+            PrepareAutoBuffButton(self, mouseButton)
+        end)
+        row:SetScript("PostClick", function(self)
+            ClearAutoBuffButton(self)
+            buffFrame.elapsed = 1.0
+        end)
+        AddActionTooltip(row, CLASS_NAMES[classId] or "Class", {
+            { key = "Left-click", text = "Cast this class assignment if a valid target is available." },
+            { text = "The row shows class icon, assigned blessing and the lowest remaining duration for that class." },
+        })
+        buffFrameRows[classId] = row
+    end
 
     buffFrame:SetScript("OnUpdate", function(self, elapsed)
         self.elapsed = (self.elapsed or 0) + (elapsed or 0)
@@ -1241,12 +1490,30 @@ local function CreateBuffFrame()
     end)
 end
 
-local function UpdateSecureCastButton(task)
-    -- Do not set spell/unit here. PallyPower sets secure spell/unit attributes
-    -- in PreClick and clears them in PostClick. Updating them from OnUpdate can
-    -- produce Blizzard-only/taint errors on older 3.3.5 clients.
+UpdateSecureCastButton = function(task)
     if not buffFrame or not buffFrame.castButton then return end
     buffFrame.nextTask = task
+    SetSecureBuffAttributes(buffFrame.castButton, task)
+end
+
+UpdateCastButtonVisual = function(task)
+    if not buffFrame or not buffFrame.castButton or not buffFrame.castButton.icon then return end
+
+    if task then
+        buffFrame.castButton.icon:SetTexture(GetBlessingIcon(task.blessingId))
+        buffFrame.castButton.icon:Show()
+        buffFrame.castButton.text:SetText("")
+        if buffFrame.summary then
+            buffFrame.summary:SetText((task.blessingName or "Buff") .. " -> " .. (task.className or "Class"))
+        end
+    else
+        buffFrame.castButton.icon:SetTexture("Interface\\Icons\\Spell_Holy_SealOfSalvation")
+        buffFrame.castButton.icon:Show()
+        buffFrame.castButton.text:SetText("")
+        if buffFrame.summary then
+            buffFrame.summary:SetText("All assigned buffs OK")
+        end
+    end
 end
 
 RefreshBuffFrame = function()
@@ -1268,38 +1535,66 @@ RefreshBuffFrame = function()
     EnsurePally(player)
     buffFrame:Show()
 
-    local tasks = BuildBuffTasks()
-    local task = tasks[1]
+    local task, tasks = SelectAutoBuffTask()
+    tasks = tasks or {}
     buffFrame.nextTask = task
     UpdateSecureCastButton(task)
+    UpdateCastButtonVisual(task)
 
-    if task then
-        buffFrame.castButton.icon:SetTexture(GetBlessingIcon(task.blessingId))
-        buffFrame.castButton.icon:Show()
-        buffFrame.castButton.text:SetText("")
-        buffFrame.summary:SetText((task.blessingName or "Buff") .. " -> " .. (task.className or "Class"))
-    else
-        buffFrame.castButton.icon:SetTexture("Interface\\Icons\\Spell_Holy_SealOfSalvation")
-        buffFrame.castButton.icon:Show()
-        buffFrame.castButton.text:SetText("")
-        buffFrame.summary:SetText("All assigned buffs OK")
+    local visibleRows = 0
+    local classId
+    for classId = 1, MAX_CLASSES do
+        local row = buffFrameRows[classId]
+        local status = BuildClassBuffStatus(classId)
+        if row and status then
+            visibleRows = visibleRows + 1
+            SetSecureBuffAttributes(row, SelectClassBuffTask(classId))
+            if not (InCombatLockdown and InCombatLockdown()) then
+                row:ClearAllPoints()
+                row:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 12, -76 - ((visibleRows - 1) * 29))
+            end
+            SetClassIconVisual(row.classIcon, classId)
+            row.buffIcon:SetTexture(GetBlessingIcon(status.blessingId))
+            if not status.hasUnit then
+                row.timeText:SetText("--")
+                row.timeText:SetTextColor(0.55, 0.55, 0.55)
+                row:SetBackdropColor(0.10, 0.10, 0.10, 0.88)
+                row:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+            elseif status.missing then
+                local countText = tostring(status.buffedCount or 0) .. "/" .. tostring(status.totalCount or 0)
+                if status.partial then
+                    row.timeText:SetText(countText .. " MISS")
+                else
+                    row.timeText:SetText("MISS " .. countText)
+                end
+                row.timeText:SetTextColor(1.0, 0.15, 0.15)
+                row:SetBackdropColor(0.26, 0.00, 0.00, 0.92)
+                row:SetBackdropBorderColor(0.9, 0.15, 0.15, 1)
+            elseif status.remaining and status.remaining <= 300 then
+                row.timeText:SetText(FormatRemaining(status.remaining) .. " " .. tostring(status.buffedCount or 0) .. "/" .. tostring(status.totalCount or 0))
+                row.timeText:SetTextColor(1.0, 0.82, 0.05)
+                row:SetBackdropColor(0.22, 0.14, 0.00, 0.92)
+                row:SetBackdropBorderColor(0.9, 0.72, 0.1, 1)
+            else
+                row.timeText:SetText(FormatRemaining(status.remaining) .. " " .. tostring(status.buffedCount or 0) .. "/" .. tostring(status.totalCount or 0))
+                row.timeText:SetTextColor(0.15, 1.0, 0.15)
+                row:SetBackdropColor(0.0, 0.20, 0.02, 0.92)
+                row:SetBackdropBorderColor(0.2, 0.8, 0.25, 1)
+            end
+            if not (InCombatLockdown and InCombatLockdown()) then
+                row:Show()
+            end
+        elseif row then
+            if not (InCombatLockdown and InCombatLockdown()) then
+                row:Hide()
+            end
+        end
     end
-
-    local lines = {}
-    local maxLines = 3
-    local i
-    for i = 1, table.getn(tasks) do
-        if i > maxLines then break end
-        local t = tasks[i]
-        table.insert(lines, (t.className or "Class") .. ": " .. (t.blessingName or "Buff") .. " " .. (t.missing and "missing" or FormatRemaining(t.remaining)))
-    end
-    if table.getn(tasks) > maxLines then
-        table.insert(lines, "+" .. tostring(table.getn(tasks) - maxLines) .. " more")
-    end
-    if table.getn(lines) == 0 then
-        buffFrame.popup:SetText("No missing or expiring assignments.")
-    else
-        buffFrame.popup:SetText(table.concat(lines, "\n"))
+    if visibleRows == 0 and buffFrame.popup then
+        buffFrame.popup:Show()
+        buffFrame.popup:SetText("No class assignments.")
+    elseif buffFrame.popup then
+        buffFrame.popup:Hide()
     end
 
     AddActionTooltip(buffFrame.castButton, "PallyBuffs cast button", {

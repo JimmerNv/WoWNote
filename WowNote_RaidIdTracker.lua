@@ -1,5 +1,5 @@
 local ADDON_NAME = "WowNote"
-local MODULE_VERSION = "1.10.22"
+local MODULE_VERSION = "1.10.27"
 
 local RI = {}
 WowNoteRaidIdTracker = RI
@@ -8,8 +8,10 @@ local frame
 local listRows = {}
 local statusText
 local selectedCharKey
+local selectedRaidIndex = nil
 local scanFrame = CreateFrame("Frame", "WowNoteRaidIdTrackerEventFrame")
 local pendingScan = false
+local ScheduleScan
 local MergePostedRaidIdData
 
 local function Internal()
@@ -170,10 +172,54 @@ local function GetKilledBossNames(lock)
 end
 
 
+
+local ICC_BOSS_ORDER = {
+    "Lord Marrowgar",
+    "Lady Deathwhisper",
+    "Icecrown Gunship Battle",
+    "Deathbringer Saurfang",
+    "Festergut",
+    "Rotface",
+    "Professor Putricide",
+    "Blood Prince Council",
+    "Blood-Queen Lana'thel",
+    "Valithria Dreamwalker",
+    "Sindragosa",
+    "The Lich King",
+}
+
+local INSTANCE_BOSS_ORDER = {
+    ["icecrown citadel"] = ICC_BOSS_ORDER,
+    ["eiskronenzitadelle"] = ICC_BOSS_ORDER,
+}
+
+local BOSS_ALIASES = {
+    ["gunship battle"] = "Icecrown Gunship Battle",
+    ["icecrown gunship battle"] = "Icecrown Gunship Battle",
+    ["luftschiffkampf"] = "Icecrown Gunship Battle",
+    ["luftschiffschlacht"] = "Icecrown Gunship Battle",
+    ["luftschiffkampf um die eiskronenzitadelle"] = "Icecrown Gunship Battle",
+    ["the skybreaker"] = "Icecrown Gunship Battle",
+    ["orgrim's hammer"] = "Icecrown Gunship Battle",
+    ["dbs"] = "Deathbringer Saurfang",
+    ["saurfang"] = "Deathbringer Saurfang",
+    ["todesbringer saurfang"] = "Deathbringer Saurfang",
+}
+
 local KNOWN_RAID_BOSSES = {
     ["lord marrowgar"] = true,
     ["lady deathwhisper"] = true,
     ["deathbringer saurfang"] = true,
+    ["dbs"] = true,
+    ["saurfang"] = true,
+    ["todesbringer saurfang"] = true,
+    ["icecrown gunship battle"] = true,
+    ["gunship battle"] = true,
+    ["luftschiffkampf"] = true,
+    ["luftschiffschlacht"] = true,
+    ["luftschiffkampf um die eiskronenzitadelle"] = true,
+    ["the skybreaker"] = true,
+    ["orgrim's hammer"] = true,
     ["festergut"] = true,
     ["rotface"] = true,
     ["professor putricide"] = true,
@@ -244,12 +290,59 @@ local function NormalizeBossName(name)
     return string.lower(Trim(name or ""))
 end
 
+local function CanonicalBossName(name)
+    local original = Trim(name or "")
+    local normalized = NormalizeBossName(original)
+    return BOSS_ALIASES[normalized] or original
+end
+
 local function IsKnownRaidBoss(name)
-    local normalized = NormalizeBossName(name)
+    local normalized = NormalizeBossName(CanonicalBossName(name))
     return normalized ~= "" and KNOWN_RAID_BOSSES[normalized] == true
 end
 
+local function AddFallbackEncounterProgress(instanceName, bosses, total, progress)
+    local order = INSTANCE_BOSS_ORDER[NormalizeBossName(instanceName)]
+    if not order then return bosses, total, progress end
+
+    bosses = bosses or {}
+    total = math.max(tonumber(total or 0) or 0, #order)
+    progress = tonumber(progress or 0) or 0
+
+    local orderIndexByName = {}
+    for index, bossName in ipairs(order) do
+        orderIndexByName[NormalizeBossName(bossName)] = index
+    end
+
+    local byName = {}
+    for _, boss in ipairs(bosses) do
+        local canonical = CanonicalBossName(boss.name)
+        local key = NormalizeBossName(canonical)
+        if key ~= NormalizeBossName(boss.name) then
+            boss.name = canonical
+        end
+        byName[key] = boss
+        if boss.killed and orderIndexByName[key] then
+            progress = math.max(progress, orderIndexByName[key])
+        end
+    end
+
+    for index, bossName in ipairs(order) do
+        local key = NormalizeBossName(bossName)
+        if not byName[key] then
+            local boss = { name = bossName, killed = index <= progress, inferred = true }
+            table.insert(bosses, boss)
+            byName[key] = boss
+        elseif index <= progress then
+            byName[key].killed = true
+        end
+    end
+
+    return bosses, total, progress
+end
+
 local function MergeBossIntoLock(lock, bossName, killed)
+    bossName = CanonicalBossName(bossName)
     if not lock or not bossName or bossName == "" then return false end
     lock.bosses = lock.bosses or {}
     local normalized = NormalizeBossName(bossName)
@@ -272,6 +365,64 @@ local function MergeBossIntoLock(lock, bossName, killed)
     lock.numEncounters = math.max(tonumber(lock.numEncounters or 0) or 0, #lock.bosses)
     lock.encounterProgress = math.max(tonumber(lock.encounterProgress or 0) or 0, killedCount)
     return true
+end
+
+local function GetSelectedLock()
+    local db = EnsureDB()
+    local entry = selectedCharKey and db.characters and db.characters[selectedCharKey]
+    local raids = entry and entry.raids or {}
+    return selectedRaidIndex and raids[selectedRaidIndex] or nil
+end
+
+local function IsBossKilledInLock(lock, bossName)
+    local key = NormalizeBossName(CanonicalBossName(bossName))
+    for _, boss in ipairs(lock and lock.bosses or {}) do
+        if NormalizeBossName(CanonicalBossName(boss.name)) == key then
+            return boss.killed and true or false
+        end
+    end
+    return false
+end
+
+local function SetManualBossKill(lock, bossName, killed)
+    if not lock or not bossName or bossName == "" then return false end
+    bossName = CanonicalBossName(bossName)
+    lock.bosses = lock.bosses or {}
+    local key = NormalizeBossName(bossName)
+    local found
+    for _, boss in ipairs(lock.bosses) do
+        if NormalizeBossName(CanonicalBossName(boss.name)) == key then
+            found = boss
+            break
+        end
+    end
+    if not found then
+        found = { name = bossName, killed = false, manual = true }
+        table.insert(lock.bosses, found)
+    end
+    found.name = bossName
+    found.killed = killed and true or false
+    found.manual = true
+    lock.manualBossUpdatedAt = time()
+
+    local killedCount = 0
+    for _, boss in ipairs(lock.bosses or {}) do
+        if boss.killed then killedCount = killedCount + 1 end
+    end
+    lock.numEncounters = math.max(tonumber(lock.numEncounters or 0) or 0, #lock.bosses)
+    lock.encounterProgress = killedCount
+    return true
+end
+
+local function ToggleSelectedBossKill(bossName)
+    local lock = GetSelectedLock()
+    if not lock or not bossName then return end
+    local killed = not IsBossKilledInLock(lock, bossName)
+    SetManualBossKill(lock, bossName, killed)
+    if statusText then
+        statusText:SetText((killed and "Marked killed: " or "Cleared kill: ") .. tostring(CanonicalBossName(bossName)))
+    end
+    if RI.RefreshUI then RI.RefreshUI() end
 end
 
 local function GetCurrentRaidContext()
@@ -316,8 +467,60 @@ local function MergeLiveBossKillsIntoLock(db, charKey, lock)
     end
 end
 
+local function RecordLiveEncounterProgress(instanceName, progress, reason)
+    local order = INSTANCE_BOSS_ORDER[NormalizeBossName(instanceName)]
+    if not order then return false end
+
+    progress = math.min(math.max(tonumber(progress or 0) or 0, 0), #order)
+    if progress <= 0 then return false end
+
+    local db = EnsureDB()
+    local charKey = GetPlayerKey()
+    db.liveBossKills = db.liveBossKills or {}
+    db.liveBossKills[charKey] = db.liveBossKills[charKey] or {}
+    db.liveBossKills[charKey][instanceName] = db.liveBossKills[charKey][instanceName] or {}
+
+    local now = time()
+    for index = 1, progress do
+        db.liveBossKills[charKey][instanceName][CanonicalBossName(order[index])] = now
+    end
+
+    local entry = db.characters[charKey]
+    if entry and entry.raids then
+        for _, lock in ipairs(entry.raids) do
+            if tostring(lock.name or "") == tostring(instanceName) then
+                for index = 1, progress do
+                    MergeBossIntoLock(lock, order[index], true)
+                end
+                lock.bosses, lock.numEncounters, lock.encounterProgress = AddFallbackEncounterProgress(lock.name, lock.bosses, lock.numEncounters, lock.encounterProgress)
+                lock.liveBossUpdatedAt = now
+            end
+        end
+    end
+
+    if statusText then
+        statusText:SetText(reason or ("Recorded raid progress: " .. tostring(progress) .. " bosses in " .. tostring(instanceName) .. "."))
+    end
+    if RI.RefreshUI then RI.RefreshUI() end
+    if RequestRaidInfo then RequestRaidInfo() end
+    ScheduleScan()
+    return true
+end
+
+local function IsSaurfangCombatName(name)
+    local normalized = NormalizeBossName(CanonicalBossName(name))
+    return normalized == "deathbringer saurfang" or normalized == "dbs" or normalized == "saurfang" or normalized == "todesbringer saurfang"
+end
+
+local function RecordSaurfangPullFallback(sourceName, destName)
+    local instanceName = GetCurrentRaidInstanceName()
+    if not instanceName or not INSTANCE_BOSS_ORDER[NormalizeBossName(instanceName)] then return false end
+    if not IsSaurfangCombatName(sourceName) and not IsSaurfangCombatName(destName) then return false end
+    return RecordLiveEncounterProgress(instanceName, 3, "Recorded ICC progress: Saurfang combat seen; marking Marrowgar, Deathwhisper and Gunship as done.")
+end
+
 local function RecordLiveBossKill(bossName)
-    bossName = Trim(bossName or "")
+    bossName = CanonicalBossName(bossName)
     if bossName == "" or not IsKnownRaidBoss(bossName) then return false end
     local instanceName = GetCurrentRaidInstanceName()
     if not instanceName then return false end
@@ -349,12 +552,13 @@ local function RecordLiveBossKill(bossName)
 end
 
 local function HandleCombatLogEvent(...)
-    local timestamp, subevent, arg3, arg4, arg5, arg6, arg7, arg8 = ...
-    if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then return end
-    local destName = arg7
-    if type(destName) ~= "string" or destName == "" then
-        destName = arg8
+    local timestamp, subevent, arg3, sourceGUID, sourceName, sourceFlags, destGUID, destName = ...
+
+    if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then
+        RecordSaurfangPullFallback(sourceName, destName)
+        return
     end
+
     if type(destName) ~= "string" or destName == "" then return end
     RecordLiveBossKill(destName)
 end
@@ -386,6 +590,7 @@ function RI.ScanCurrentCharacter()
         if isRaid == true and locked == true and name then
             local resetSeconds = tonumber(reset or 0) or 0
             local bosses, totalEncounters, killedEncounters = ScanEncounterProgress(i, numEncounters, encounterProgress)
+            bosses, totalEncounters, killedEncounters = AddFallbackEncounterProgress(name, bosses, totalEncounters, killedEncounters)
             local lock = {
                 name = name,
                 id = id,
@@ -413,6 +618,7 @@ function RI.ScanCurrentCharacter()
                 end
             end
             MergeLiveBossKillsIntoLock(db, charKey, lock)
+            lock.bosses, lock.numEncounters, lock.encounterProgress = AddFallbackEncounterProgress(lock.name, lock.bosses, lock.numEncounters, lock.encounterProgress)
             if ShouldAttachCurrentGroupToLock(lock, currentRaidContext) then
                 for _, memberName in ipairs(currentMembers) do
                     AddUnique(lock.members, memberName)
@@ -435,7 +641,7 @@ function RI.ScanCurrentCharacter()
     end
 end
 
-local function ScheduleScan()
+ScheduleScan = function()
     if pendingScan then return end
     pendingScan = true
     local elapsed = 0
@@ -518,8 +724,6 @@ local function CreateCharButton(parent, index)
     end)
     return b
 end
-
-local selectedRaidIndex = nil
 
 local function CreateRaidRow(parent, index)
     local row = CreateFrame("Button", nil, parent)
@@ -904,6 +1108,27 @@ function RI.RefreshUI()
             frame.detailsText:SetText("Select a raid ID to see saved-with details.")
         end
     end
+
+    if frame.bossButtons then
+        local lock = selectedRaidIndex and raids[selectedRaidIndex]
+        local order = lock and INSTANCE_BOSS_ORDER[NormalizeBossName(lock.name or "")] or nil
+        local source = order or {}
+        local used = {}
+        local i
+        for i = 1, 12 do
+            local button = frame.bossButtons[i]
+            local bossName = source[i]
+            if button and lock and bossName then
+                local killed = IsBossKilledInLock(lock, bossName)
+                button.bossName = bossName
+                button:SetText((killed and "[x] " or "[ ] ") .. tostring(bossName))
+                button:Show()
+            elseif button then
+                button.bossName = nil
+                button:Hide()
+            end
+        end
+    end
 end
 
 local function CreateUI()
@@ -1015,6 +1240,22 @@ local function CreateUI()
     frame.detailsText:SetJustifyH("LEFT")
     frame.detailsText:SetJustifyV("TOP")
     frame.detailsText:SetText("Select a raid ID to see saved-with details.")
+
+    frame.bossButtons = {}
+    for i = 1, 12 do
+        local bossButton = MakeButton(frame, "Boss", 132, 20)
+        local col = (i - 1) % 4
+        local row = math.floor((i - 1) / 4)
+        bossButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 240 + (col * 142), -416 - (row * 22))
+        bossButton.index = i
+        bossButton:SetScript("OnClick", function(self)
+            if self.bossName then
+                ToggleSelectedBossKill(self.bossName)
+            end
+        end)
+        bossButton:Hide()
+        frame.bossButtons[i] = bossButton
+    end
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 18)
