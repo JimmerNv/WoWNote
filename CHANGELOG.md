@@ -1,3 +1,23 @@
+## 1.14.49
+
+- Refined the Raid Planner Port Helper layout.
+- Moved the message field to its own full-width row.
+- Increased the channel field width and aligned labels and inputs consistently.
+- Shifted controls and request rows downward to avoid visual crowding.
+
+## 1.14.48
+
+- Port Helper now automatically removes summon requests after the player remains within approximate 40-yard group range for 0.75 seconds.
+- Added a short confirmation delay to avoid removing entries because of a single transient range update.
+
+## 1.14.42
+
+- Added a Raid Planner Port Helper with configurable reply code, chat channel, and announcement text.
+- Added typo-tolerant summon request detection for permutations such as `123`, `132`, and `1 2 3`.
+- Added one clickable character button per request to target the player for summoning.
+- Added group, offline, and approximate in-range status updates plus right-click removal.
+- Added `/wnport` to open the Port Helper directly.
+
 # v1.14.41
 
 - Reworked PostalLite Open All for Auction House item mails.
@@ -206,3 +226,11 @@ This project went through several transport experiments:
 - Channel payload escaping for WoW chat safety
 
 On the tested server, reliable user-facing share behavior could not be guaranteed because server-side chat throttling/muting interfered with larger transfers. The UI therefore no longer exposes the Share workflow.
+
+## 1.14.44
+
+- Added explicit Start Tracking / Stop Tracking controls to the Raid Planner Port Helper GUI.
+- Posting a port request now starts tracking automatically.
+- Added `/wnport start` and `/wnport stop` commands.
+- Chat requests and periodic range refreshes are ignored while tracking is stopped.
+- Added a visible tracking status indicator to the Port Helper window.

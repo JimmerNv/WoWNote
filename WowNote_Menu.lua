@@ -190,6 +190,15 @@ function WowNote_BuildSideMenu(parent, makeButton)
         if WowNote_OpenBankViewer then WowNote_OpenBankViewer() else Print("Bank module is not loaded.") end
     end, "Open the bank viewer.")
 
+    AddButton("Port Helper", function()
+        HideSubmenu()
+        if WowNote_RaidPlanner and WowNote_RaidPlanner.ShowPortHelper then
+            WowNote_RaidPlanner.ShowPortHelper()
+        else
+            Print("Port Helper module is not loaded.")
+        end
+    end, "Open the Raid Planner summon request helper.")
+
     y = y - 8
     AddButton("Quality of Life", function()
         ShowSubmenu(parent, makeButton, "Quality of Life", "qol", {

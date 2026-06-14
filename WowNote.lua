@@ -2516,7 +2516,8 @@ CreateUI = function()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -16)
-    title:SetText("WowNote")
+    local addonVersion = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version")
+    title:SetText(addonVersion and addonVersion ~= "" and ("WowNote v" .. addonVersion) or "WowNote")
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
