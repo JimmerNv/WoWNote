@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## 1.14.59
 
 - Restored the original `_Cursor` 3.3.0.2 fullscreen model viewport semantics instead of parenting cursor models to the WowNote/UIParent frame.
@@ -54,6 +55,8 @@
 - Added consistent base levels to the main editor, transfer dialogs, Character Notes, Item Tracker, Restock, Raid Planner, Port Helper, PallyBuffs, and other standalone windows.
 - Corrected the Raid ID row highlight texture path discovered during the full Lua syntax audit.
 
+=======
+>>>>>>> d520f04b9ca14e3eb6ed4266b24c1ac85709f558
 ## 1.14.49
 
 - Refined the Raid Planner Port Helper layout.
