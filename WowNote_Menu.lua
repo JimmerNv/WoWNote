@@ -203,13 +203,14 @@ function WowNote_BuildSideMenu(parent, makeButton)
     AddButton("Quality of Life", function()
         ShowSubmenu(parent, makeButton, "Quality of Life", "qol", {
             { text = "Raid Planner", tooltip = "Open raid planning presets and roster assignments.", func = function() if WowNote_OpenRaidPlanner then WowNote_OpenRaidPlanner() else Print("Raid Planner module is not loaded.") end end },
+            { text = "Bite Helper", moduleKey = "biteHelper", tooltip = "Plan and track Blood-Queen Lana'thel bite assignments.", func = function() if WowNote_OpenBiteHelper then WowNote_OpenBiteHelper(true) else Print("Bite Helper module is not loaded.") end end },
             { text = "PallyBuffs", moduleKey = "pallyBuffs", tooltip = "Open Blessing and Aura assignments.", func = function() if WowNote_OpenPallyBuffs then WowNote_OpenPallyBuffs() else Print("PallyBuffs module is not loaded.") end end },
             { text = "Cursor Effects", moduleKey = "cursorEffects", tooltip = "Configure animated effects that follow the mouse cursor.", func = function() if WowNote_OpenCursorEffects then WowNote_OpenCursorEffects() else Print("Cursor Effects module is not loaded.") end end },
             { text = "Screen Draw", tooltip = "Open the free screen drawing overlay.", func = function() if WowNote_OpenScreenDraw then WowNote_OpenScreenDraw() else Print("Screen Draw module is not loaded.") end end },
             { text = "Tactical Board", tooltip = "Open the tactical drawing board for raid tactics.", func = function() if WowNote_OpenTacticalMap then WowNote_OpenTacticalMap() else Print("Tactical Board module is not loaded.") end end },
             { text = "Clear Tactical HUD", tooltip = "Clear the active tactical HUD overlay.", func = function() if WowNote_HudDraw_Clear then WowNote_HudDraw_Clear() else Print("Tactical HUD module is not loaded.") end end },
         })
-    end, "Open raid planning, cursor effects, PallyBuffs and draw tools.")
+    end, "Open raid planning, Bite Helper, cursor effects, PallyBuffs and draw tools.")
 
     AddButton("Data Transfer", function()
         ShowSubmenu(parent, makeButton, "Data Transfer", "transfer", {

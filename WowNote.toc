@@ -2,7 +2,7 @@
 ## Title: Titan Panel [|cffeda55fWowNote|r]
 ## Notes: Account-wide Markdown notes with GUI, GUIDs, item links, talent planner and raid LFM planner for WoW 3.3.5a
 ## Author: Johannes / ChatGPT
-## Version: 1.14.59
+## Version: 1.14.66
 ## SavedVariables: WowNoteDB, WowNotePostal3DB
 ## SavedVariablesPerCharacter: WowNoteCharDB
 ## OptionalDeps: Titan, PallyPower, Ace3
@@ -28,6 +28,7 @@ WowNote_RaidPlanner_Core.lua
 WowNote_RaidPlanner_Roster.lua
 WowNote_RaidPlanner_PortHelper.lua
 WowNote_RaidPlanner_UI.lua
+WowNote_BiteHelper.lua
 WowNote_Minimap.lua
 WowNote_AutoLootRoller.lua
 WowNote_AutoVendor.lua

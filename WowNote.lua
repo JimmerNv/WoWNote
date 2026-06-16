@@ -258,7 +258,18 @@ local function MigrateNotesToGuids()
     local changed = false
 
     for key, note in pairs(WowNoteDB.notes) do
-        if type(note) == "table" then
+        if type(note) == "string" then
+            local guid = GenerateGUID()
+            migrated[guid] = {
+                guid = guid,
+                version = WOWNOTE_NOTE_FORMAT_VERSION,
+                title = Trim(tostring(key or "")) ~= "" and tostring(key) or "Untitled",
+                content = note,
+                created = time and time() or 0,
+                updated = time and time() or 0,
+            }
+            changed = true
+        elseif type(note) == "table" then
             local guid = nil
             if IsGuidKey(key) then
                 guid = key
@@ -276,6 +287,8 @@ local function MigrateNotesToGuids()
                 changed = true
             end
             migrated[guid] = note
+        else
+            changed = true
         end
     end
 
@@ -825,6 +838,20 @@ local sentTransfers = {}
 local commMaintenanceFrame = nil
 local commDebug = false
 local BuildTransferId
+
+function WowNote_IsCommDebugEnabled()
+    return commDebug == true
+end
+
+function WowNote_SetCommDebugEnabled(enabled)
+    commDebug = enabled == true
+end
+
+function WowNote_CommDebug(message)
+    if commDebug then
+        Print("DEBUG " .. tostring(message or ""))
+    end
+end
 
 local function EscapeChatPayload(payload)
     payload = tostring(payload or "")
@@ -4101,6 +4128,8 @@ function WowNote_PrintHelp()
     Print("/wn restock - Open the merchant restock assistant.")
     Print("/wn pallybuffs - Open PallyBuffs assignments.")
     Print("/wn cursor - Open cursor effect settings.")
+    Print("/wn bite - Open the Blood-Queen Bite Helper.")
+    Print("/wnbite test on/off - Toggle the local Bite Helper test mode.")
     Print("/wn pally sync - Request a PallyBuffs assignment sync.")
     Print("/wn pally test on - Enable the PallyBuffs sample/test mode.")
     Print("/wn pally test off - Disable the PallyBuffs sample/test mode.")
@@ -4139,6 +4168,8 @@ SlashCmdList["WOWNOTE"] = function(msg)
         WowNote_OpenTalents()
     elseif lowerMsg == "raid" or lowerMsg == "raidplanner" or lowerMsg == "lfm" then
         WowNote_OpenRaidPlanner()
+    elseif lowerMsg == "bite" or lowerMsg == "bitehelper" or lowerMsg == "byte" then
+        if WowNote_OpenBiteHelper then WowNote_OpenBiteHelper(true) else Print("Bite Helper module is not loaded.") end
     elseif lowerMsg == "loot" or lowerMsg == "looter" or lowerMsg == "loottools" then
         if WowNote_OpenLootTools then
             WowNote_OpenLootTools("roll")
@@ -4314,6 +4345,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("New note", TITAN_ID, "WowNote_NewFromTitan")
     TitanPanelRightClickMenu_AddCommand("Talent Planner", TITAN_ID, "WowNote_OpenTalents")
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
+    TitanPanelRightClickMenu_AddCommand("Bite Helper", TITAN_ID, "WowNote_OpenBiteHelper")
     TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddCommand("Raid IDs", TITAN_ID, "WowNote_OpenRaidIdTracker")
     TitanPanelRightClickMenu_AddCommand("Bank Viewer", TITAN_ID, "WowNote_OpenBankViewer")

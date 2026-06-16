@@ -12,6 +12,7 @@ local MODULE_DEFAULTS = {
     social = true,
     dataTransfer = true,
     cursorEffects = true,
+    biteHelper = true,
 }
 
 local MODULE_LABELS = {
@@ -21,6 +22,7 @@ local MODULE_LABELS = {
     { key = "social", label = "Social protections" },
     { key = "dataTransfer", label = "Data transfer" },
     { key = "cursorEffects", label = "Cursor effects" },
+    { key = "biteHelper", label = "Bite Helper" },
 }
 
 local function Print(msg)
@@ -74,6 +76,7 @@ function WowNote_SetModuleEnabled(key, enabled)
     if key == "pallyBuffs" and not enabled and WowNotePallyPowerFrame then WowNotePallyPowerFrame:Hide() end
     if key == "characterNotes" and not enabled and WowNoteCharacterNotesFrame then WowNoteCharacterNotesFrame:Hide() end
     if key == "cursorEffects" and WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(enabled) end
+    if key == "biteHelper" and WowNote_BiteHelper_SetEnabled then WowNote_BiteHelper_SetEnabled(enabled) end
     Print((enabled and "Enabled " or "Disabled ") .. tostring(key))
 end
 
@@ -220,4 +223,5 @@ init:SetScript("OnEvent", function()
     EnsureSettings()
     ApplyMailModuleState(WowNote_IsModuleEnabled("mailFeatures"))
     if WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(WowNote_IsModuleEnabled("cursorEffects")) end
+    if WowNote_BiteHelper_SetEnabled then WowNote_BiteHelper_SetEnabled(WowNote_IsModuleEnabled("biteHelper")) end
 end)

@@ -1,4 +1,67 @@
-<<<<<<< HEAD
+## 1.14.66
+
+- Fixed Bite Helper raid-chat synchronization on clients where visible raid messages were not reaching the module's normal event frame.
+- Added a non-blocking chat-frame filter as a second receive path for Bite Order headers and rows.
+- Trusted the dedicated raid-leader chat event when private-server roster rank data is stale.
+- Prevented duplicate event/filter delivery from resetting an in-progress chat transfer.
+- Made the Player HUD background and title bar always draggable outside combat and added a visible drag hint.
+
+## 1.14.65
+
+- Fixed Bite Helper synchronization on servers that report successful RAID addon sends but do not deliver them to other clients.
+- Added direct `WNOTE` addon whispers to every raid member while retaining both RAID addon-message routes.
+- Added a validated raid-chat fallback protocol that reconstructs Bite rows from the visible leader/assistant post and automatically opens the receiver player HUD.
+- Added transfer deduplication across addon and raid-chat routes plus duplicate ACK suppression.
+- Fixed `/wnbite debug on` so it actually enables communication diagnostics and logs both addon events and raid-chat fallback reception.
+- Made the player HUD unlocked after the one-time migration, clamped it to the screen, and kept its title bar draggable even while the HUD is locked.
+- Re-ran Lua 5.1 syntax checks, TOC/load-order checks, full addon initialization, central UI/slash-command flows, and targeted Bite Helper sync/HUD regression tests.
+
+## 1.14.64
+
+- Reworked Bite Helper synchronization to use the established `WowNote` addon prefix with a `WNOTE` fallback route.
+- Added paced packet sending, duplicate suppression, receiver acknowledgements, and detailed `/wn debug on` diagnostics for Bite Order synchronization.
+- Made raid lead/assistant validation case-insensitive for incoming sync messages.
+- Added a visible drag bar when the player HUD is unlocked and enabled dragging from target fields as well as the overlay background.
+- Kept the corrected directional arrow behavior unchanged.
+- Re-ran full initialization, UI, module, sync, SavedVariables, slash-command, and event regression tests.
+
+## 1.14.63
+
+- Automatically skips the current Bite assignment when its target is dead, marks it as skipped, and advances to the next valid target without waiting for a Bite aura.
+- Corrected the directional arrow calculation to the WoW 3.3.5 map/facing convention used by established DBM/TomTom-style navigation logic.
+- Switched Bite Order synchronization to WowNote's established `WNOTE` addon prefix and retained legacy `WNBITE` receive compatibility.
+- Received Bite Orders now explicitly open the player overlay without opening the editor.
+- Added packet-send error reporting and kept raid-chat posting separate from structured addon synchronization.
+- Improved TEST MODE kill/revive behavior so automatic dead-target skipping can be tested and reversed.
+- Re-ran the complete WowNote release-gate checks after the Bite Helper changes.
+
+## 1.14.62
+
+- Fixed the Bite Helper editor crash on WoW 3.3.5a by replacing the unavailable `Button:SetEnabled()` method with the supported `Enable()` / `Disable()` flow.
+- Added a strict WoW 3.3.5a compatibility check for every frame method and global API used by the Bite Helper.
+- Hardened nested Bite Helper SavedVariables so invalid rows, assignments, roster entries, anchor points, and numeric offsets cannot break initialization or editor opening.
+- Added bounds and validation for received Bite Helper synchronization chunks and rejects malformed or invalid remote bite orders.
+- Added comprehensive Bite Helper tests for editor controls, drag-and-drop, row propagation, test mode, secure targeting, combat deferral, dead/revive state, directional arrows, posting, addon sync, combat-log progression, aura fallback, and module enable/disable.
+- Re-ran the complete WowNote initialization, window, event, and module regression suite on the final package.
+
+## 1.14.61
+
+- Fixed Bite Helper editor crashes on WoW 3.3.5a by replacing unavailable `math.mod` calls with the Lua modulo operator.
+- Bite Helper overlay and editor now always start closed after login.
+- Received bite orders and local sync simulations still open the overlay immediately after login-safe initialization.
+- New Bite Helper installations default to a hidden overlay until opened manually or a raid order is received.
+- Hardened legacy note migration so string-based notes are preserved as valid GUID notes and invalid entries cannot break note actions.
+
+## 1.14.60
+
+- Added a Blood-Queen Lana'thel Bite Helper with a personal target overlay and raid-lead editor.
+- Added clickable secure target buttons, current-round holy highlighting, dead/revive indicators, and a best-effort directional arrow.
+- Added automatic progression from Vampiric Bite combat-log events with an Essence aura fallback.
+- Added raid-lead/assistant-only posting and chunked WoWNote addon-channel synchronization.
+- Added drag-and-drop bite-tree editing, automatic source generation for following rounds, row removal, and readable raid-chat output.
+- Added a full local TEST MODE with simulated roster, bite completion, previous/reset, kill/revive, direction rotation, and local sync controls.
+- Added Quality of Life menu, settings toggle, Titan menu, `/wn bite`, and `/wnbite` integration.
+
 ## 1.14.59
 
 - Restored the original `_Cursor` 3.3.0.2 fullscreen model viewport semantics instead of parenting cursor models to the WowNote/UIParent frame.
@@ -55,8 +118,6 @@
 - Added consistent base levels to the main editor, transfer dialogs, Character Notes, Item Tracker, Restock, Raid Planner, Port Helper, PallyBuffs, and other standalone windows.
 - Corrected the Raid ID row highlight texture path discovered during the full Lua syntax audit.
 
-=======
->>>>>>> d520f04b9ca14e3eb6ed4266b24c1ac85709f558
 ## 1.14.49
 
 - Refined the Raid Planner Port Helper layout.

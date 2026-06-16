@@ -29,13 +29,8 @@ local function SafePlayerName(name)
 end
 
 local function EnsureDB()
-<<<<<<< HEAD
     if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
     if type(WowNoteDB.raidPlannerPortHelper) ~= "table" then WowNoteDB.raidPlannerPortHelper = {} end
-=======
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.raidPlannerPortHelper = WowNoteDB.raidPlannerPortHelper or {}
->>>>>>> d520f04b9ca14e3eb6ed4266b24c1ac85709f558
     local db = WowNoteDB.raidPlannerPortHelper
     if type(db.code) ~= "string" or db.code == "" then db.code = "123" end
     if type(db.channel) ~= "string" or db.channel == "" then db.channel = "/raid" end
@@ -328,11 +323,8 @@ local function CreateFrameUI()
     f:SetHeight(510)
     f:SetPoint("CENTER", UIParent, "CENTER", 280, 0)
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-<<<<<<< HEAD
     if f.SetToplevel then f:SetToplevel(true) end
     f:SetFrameLevel(100)
-=======
->>>>>>> d520f04b9ca14e3eb6ed4266b24c1ac85709f558
     f:SetMovable(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
@@ -481,15 +473,11 @@ end
 function RP.ShowPortHelper()
     CreateFrameUI()
     PH.frame:Show()
-<<<<<<< HEAD
     if WowNote_Internal and WowNote_Internal.RaiseFrame then
         WowNote_Internal.RaiseFrame(PH.frame)
     elseif PH.frame.Raise then
         PH.frame:Raise()
     end
-=======
-    if PH.frame.Raise then PH.frame:Raise() end
->>>>>>> d520f04b9ca14e3eb6ed4266b24c1ac85709f558
     UpdateTrackingUI()
     RefreshRows()
 end
