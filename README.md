@@ -6,6 +6,8 @@ It provides an in-game note editor, a talent planner, a raid planner with reusab
 
 ## Features
 
+- **Cursor Effects** – animated configurable cursor trails and particles, available under Quality of Life.
+
 ### Notes
 
 - Account-wide saved notes through `WowNoteDB`

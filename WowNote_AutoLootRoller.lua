@@ -97,12 +97,14 @@ end
 
 local function RaiseFrame(target)
     if not target then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(target)
+        return
+    end
     target:SetFrameStrata("FULLSCREEN_DIALOG")
     target:SetFrameLevel(100)
     target:SetToplevel(true)
-    if target.Raise then
-        target:Raise()
-    end
+    if target.Raise then target:Raise() end
 end
 
 local function MakeLabel(parent, text, x, y)

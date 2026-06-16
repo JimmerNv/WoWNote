@@ -68,15 +68,19 @@ end
 
 local function RaiseFrame(target)
     if not target then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(target)
+        return
+    end
     target:SetFrameStrata("FULLSCREEN_DIALOG")
-    target:SetFrameLevel(1000)
+    target:SetFrameLevel(100)
     target:SetToplevel(true)
     if target.Raise then target:Raise() end
 end
 
 local function RaiseChild(child, parent, offset)
     if child and parent and parent.GetFrameLevel then
-        child:SetFrameLevel((parent:GetFrameLevel() or 1000) + (offset or 1))
+        child:SetFrameLevel((parent:GetFrameLevel() or 100) + (offset or 1))
     end
     return child
 end
@@ -501,7 +505,7 @@ local function CreateLootToolsUI()
     frame:SetSize(560, 520)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
-    frame:SetFrameLevel(1000)
+    frame:SetFrameLevel(100)
     frame:SetToplevel(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)

@@ -249,6 +249,7 @@ function WowNote_RaidPlanner_ShowTransferFrame(mode)
         f:SetPoint("CENTER")
         f:SetFrameStrata("FULLSCREEN_DIALOG")
         if f.SetToplevel then f:SetToplevel(true) end
+        f:SetFrameLevel(100)
         f:EnableMouse(true)
         f:SetMovable(true)
         f:RegisterForDrag("LeftButton")
@@ -459,6 +460,7 @@ function WowNote_CreateRaidPlannerUI()
     f:SetPoint("CENTER")
     f:SetFrameStrata("FULLSCREEN_DIALOG")
     if f.SetToplevel then f:SetToplevel(true) end
+    f:SetFrameLevel(100)
     f:EnableMouse(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
@@ -474,6 +476,13 @@ function WowNote_CreateRaidPlannerUI()
 
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
+
+    local portHelperButton = MakeButton(f, "Port Helper", 100, 22)
+    portHelperButton:SetPoint("TOPRIGHT", f, "TOPRIGHT", -42, -14)
+    portHelperButton:SetScript("OnClick", function()
+        if RP.ShowPortHelper then RP.ShowPortHelper() end
+    end)
+    WowNote_RaidPlanner_MakeHelp(f, portHelperButton, "Opens the summon request helper. Post a reply code, collect matching chat replies, and click a player button to target them for summoning.")
 
     RP.sizeEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Raid Size", 24, -52, 70, "10", false, 24, "Choose 10, 25, or enter any custom size/text you want to show in the message.")
     local size10 = MakeButton(f, "10", 38, 22)

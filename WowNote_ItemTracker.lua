@@ -478,6 +478,7 @@ local function CreateUI()
     frame = CreateFrame("Frame", "WowNoteItemTrackerFrame", UIParent)
     frame:SetWidth(820); frame:SetHeight(560); frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG"); if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true); frame:SetMovable(true); frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)

@@ -303,6 +303,20 @@ InitDB = function()
     if type(WowNoteDB.raidPlannerPresets) ~= "table" then
         WowNoteDB.raidPlannerPresets = {}
     end
+    if type(WowNoteDB.modules) ~= "table" then WowNoteDB.modules = {} end
+    if type(WowNoteDB.characterNoteOptions) ~= "table" then WowNoteDB.characterNoteOptions = {} end
+    if type(WowNoteDB.social) ~= "table" then WowNoteDB.social = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
+    if type(WowNoteDB.characterNotes) ~= "table" then WowNoteDB.characterNotes = {} end
+    if type(WowNoteDB.tacticalMaps) ~= "table" then WowNoteDB.tacticalMaps = {} end
+    if type(WowNoteDB.pallyCompat) ~= "table" then WowNoteDB.pallyCompat = {} end
+    if type(WowNoteDB.raidIds) ~= "table" then WowNoteDB.raidIds = {} end
+    if type(WowNoteDB.raidPlannerPortHelper) ~= "table" then WowNoteDB.raidPlannerPortHelper = {} end
+    if type(WowNoteDB.inventorySnapshots) ~= "table" then WowNoteDB.inventorySnapshots = {} end
+    if type(WowNoteDB.bankSnapshots) ~= "table" then WowNoteDB.bankSnapshots = {} end
+    if type(WowNoteDB.cursorEffects) ~= "table" then WowNoteDB.cursorEffects = {} end
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.cursorEffects) ~= "table" then WowNoteCharDB.cursorEffects = {} end
     MigrateNotesToGuids()
 end
 
@@ -613,15 +627,21 @@ local function MakeButton(parent, text, width, height)
     return button
 end
 
-local wowNoteTopFrameLevel = 100
+local WOW_NOTE_DIALOG_BASE_LEVEL = 100
 local function RaiseFrame(frameToRaise)
     if not frameToRaise then return end
     if frameToRaise.SetFrameStrata then frameToRaise:SetFrameStrata("FULLSCREEN_DIALOG") end
     if frameToRaise.SetToplevel then frameToRaise:SetToplevel(true) end
-    if frameToRaise.SetFrameLevel then
-        wowNoteTopFrameLevel = wowNoteTopFrameLevel + 10
-        frameToRaise:SetFrameLevel(wowNoteTopFrameLevel)
+    if frameToRaise.SetFrameLevel and frameToRaise.GetFrameLevel then
+        local level = tonumber(frameToRaise:GetFrameLevel()) or 0
+        -- Keep normal WowNote windows inside a bounded level range. Very large
+        -- hard-coded levels can block unrelated dialogs and tooltips even after
+        -- another window is brought to the front.
+        if level < 80 or level > 200 then
+            frameToRaise:SetFrameLevel(WOW_NOTE_DIALOG_BASE_LEVEL)
+        end
     end
+    if frameToRaise.Raise then frameToRaise:Raise() end
 end
 
 local function EnableRaiseOnInteraction(frameToRaise)
@@ -2310,6 +2330,7 @@ CreateShareUI = function()
     shareFrame:SetPoint("CENTER", UIParent, "CENTER", 80, 40)
     shareFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if shareFrame.SetToplevel then shareFrame:SetToplevel(true) end
+    shareFrame:SetFrameLevel(100)
     shareFrame:EnableMouse(true)
     shareFrame:SetMovable(true)
     shareFrame:RegisterForDrag("LeftButton")
@@ -2489,6 +2510,8 @@ WowNote_OpenShare = function()
     end
 end
 
+_G.WowNote_OpenShare = WowNote_OpenShare
+
 CreateUI = function()
     if frame then return end
 
@@ -2498,6 +2521,7 @@ CreateUI = function()
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true)
     frame:SetMovable(true)
     frame:RegisterForDrag("LeftButton")
@@ -2516,7 +2540,8 @@ CreateUI = function()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -16)
-    title:SetText("WowNote")
+    local addonVersion = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version")
+    title:SetText(addonVersion and addonVersion ~= "" and ("WowNote v" .. addonVersion) or "WowNote")
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
@@ -3011,6 +3036,7 @@ CreateItemUI = function()
     itemFrame:SetPoint("CENTER", UIParent, "CENTER", 60, -35)
     itemFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if itemFrame.SetToplevel then itemFrame:SetToplevel(true) end
+    itemFrame:SetFrameLevel(100)
     itemFrame:EnableMouse(true)
     itemFrame:SetMovable(true)
     itemFrame:RegisterForDrag("LeftButton")
@@ -3955,6 +3981,7 @@ CreateTalentUI = function()
     talentFrame:SetPoint("CENTER", UIParent, "CENTER", 35, 0)
     talentFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if talentFrame.SetToplevel then talentFrame:SetToplevel(true) end
+    talentFrame:SetFrameLevel(100)
     talentFrame:EnableMouse(true)
     talentFrame:SetMovable(true)
     talentFrame:RegisterForDrag("LeftButton")
@@ -4073,6 +4100,7 @@ function WowNote_PrintHelp()
     Print("/wn tracker hide - Hide the tracker HUD.")
     Print("/wn restock - Open the merchant restock assistant.")
     Print("/wn pallybuffs - Open PallyBuffs assignments.")
+    Print("/wn cursor - Open cursor effect settings.")
     Print("/wn pally sync - Request a PallyBuffs assignment sync.")
     Print("/wn pally test on - Enable the PallyBuffs sample/test mode.")
     Print("/wn pally test off - Disable the PallyBuffs sample/test mode.")
@@ -4190,6 +4218,12 @@ SlashCmdList["WOWNOTE"] = function(msg)
             WowNote_OpenRestock()
         else
             Print("Restock module is not loaded.")
+        end
+    elseif lowerMsg == "cursor" or lowerMsg == "cursoreffects" or lowerMsg == "mousefx" then
+        if WowNote_OpenCursorEffects then
+            WowNote_OpenCursorEffects()
+        else
+            Print("Cursor Effects module is not loaded.")
         end
     elseif lowerMsg == "pally" or lowerMsg == "pallypower" or lowerMsg == "pallybuffs" or lowerMsg == "buffs" or lowerMsg == "blessings" then
         if WowNote_OpenPallyBuffs then

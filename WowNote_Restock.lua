@@ -56,6 +56,7 @@ local function EnsureFrame()
     frame = CreateFrame("Frame", "WowNoteRestockFrame", UIParent)
     frame:SetWidth(430); frame:SetHeight(260); frame:SetPoint("CENTER", UIParent, "CENTER", 0, -120)
     frame:SetFrameStrata("FULLSCREEN_DIALOG"); if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true); frame:SetMovable(true); frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)

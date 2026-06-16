@@ -11,6 +11,7 @@ local MODULE_DEFAULTS = {
     characterNotes = true,
     social = true,
     dataTransfer = true,
+    cursorEffects = true,
 }
 
 local MODULE_LABELS = {
@@ -19,6 +20,7 @@ local MODULE_LABELS = {
     { key = "characterNotes", label = "Character notes" },
     { key = "social", label = "Social protections" },
     { key = "dataTransfer", label = "Data transfer" },
+    { key = "cursorEffects", label = "Cursor effects" },
 }
 
 local function Print(msg)
@@ -27,17 +29,17 @@ end
 
 local function EnsureSettings()
     if WN.InitDB then WN.InitDB() end
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.modules = WowNoteDB.modules or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.modules) ~= "table" then WowNoteDB.modules = {} end
     for key, value in pairs(MODULE_DEFAULTS) do
         if WowNoteDB.modules[key] == nil then WowNoteDB.modules[key] = value end
     end
-    WowNoteDB.characterNoteOptions = WowNoteDB.characterNoteOptions or {}
+    if type(WowNoteDB.characterNoteOptions) ~= "table" then WowNoteDB.characterNoteOptions = {} end
     if WowNoteDB.characterNoteOptions.alwaysShow == nil then WowNoteDB.characterNoteOptions.alwaysShow = false end
-    WowNoteDB.social = WowNoteDB.social or {}
+    if type(WowNoteDB.social) ~= "table" then WowNoteDB.social = {} end
     if WowNoteDB.social.blockGuildInvite == nil then WowNoteDB.social.blockGuildInvite = false end
     if WowNoteDB.social.cleanManabonkMail == nil then WowNoteDB.social.cleanManabonkMail = true end
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     if WowNoteDB.minimap.hide == nil then WowNoteDB.minimap.hide = false end
     return WowNoteDB.modules
 end
@@ -71,6 +73,7 @@ function WowNote_SetModuleEnabled(key, enabled)
     if key == "mailFeatures" then ApplyMailModuleState(enabled) end
     if key == "pallyBuffs" and not enabled and WowNotePallyPowerFrame then WowNotePallyPowerFrame:Hide() end
     if key == "characterNotes" and not enabled and WowNoteCharacterNotesFrame then WowNoteCharacterNotesFrame:Hide() end
+    if key == "cursorEffects" and WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(enabled) end
     Print((enabled and "Enabled " or "Disabled ") .. tostring(key))
 end
 
@@ -149,7 +152,9 @@ local function CreateSettingsFrame()
     settingsFrame:SetWidth(390)
     settingsFrame:SetHeight(330)
     settingsFrame:SetPoint("CENTER")
-    settingsFrame:SetFrameStrata("DIALOG")
+    settingsFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if settingsFrame.SetToplevel then settingsFrame:SetToplevel(true) end
+    settingsFrame:SetFrameLevel(100)
     settingsFrame:SetMovable(true)
     settingsFrame:EnableMouse(true)
     settingsFrame:RegisterForDrag("LeftButton")
@@ -214,4 +219,5 @@ init:RegisterEvent("PLAYER_LOGIN")
 init:SetScript("OnEvent", function()
     EnsureSettings()
     ApplyMailModuleState(WowNote_IsModuleEnabled("mailFeatures"))
+    if WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(WowNote_IsModuleEnabled("cursorEffects")) end
 end)

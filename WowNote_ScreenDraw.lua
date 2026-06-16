@@ -39,16 +39,21 @@ end
 
 local function SetFront(f)
     if not f then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(f)
+        return
+    end
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(1200)
+    f:SetFrameLevel(100)
     if f.SetToplevel then f:SetToplevel(true) end
+    if f.Raise then f:Raise() end
 end
 
 local function MakeButton(parent, text, width, height)
     local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     b:SetSize(width or 80, height or 22)
     b:SetText(text or "Button")
-    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 50) end
+    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 5) end
     b:Enable()
     b:EnableMouse(true)
     return b
@@ -245,7 +250,8 @@ local function ShowTransfer(mode)
     else
         transferEdit:SetText("")
     end
-    transferFrame:Show(); transferFrame:Raise()
+    transferFrame:Show()
+    SetFront(transferFrame)
 end
 
 local function ShareDrawing()
@@ -331,7 +337,7 @@ local function CreateUI()
     title:SetText("WowNote Screen Draw")
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
-    close:SetFrameLevel((frame:GetFrameLevel() or 0) + 70)
+    close:SetFrameLevel((frame:GetFrameLevel() or 0) + 10)
     close:EnableMouse(true)
     close:SetScript("OnMouseDown", function() frame:Hide() end)
     close:SetScript("OnClick", function() frame:Hide() end)
@@ -372,7 +378,7 @@ local function CreateUI()
     for i, c in ipairs(colors) do
         local b = CreateFrame("Button", nil, frame)
         b:SetSize(22, 22)
-        b:SetFrameLevel((frame:GetFrameLevel() or 0) + 60)
+        b:SetFrameLevel((frame:GetFrameLevel() or 0) + 5)
         b:SetPoint("TOPLEFT", frame, "TOPLEFT", 14 + ((i - 1) * 27), -96)
         b.tex = b:CreateTexture(nil, "BACKGROUND")
         b.tex:SetAllPoints(b)

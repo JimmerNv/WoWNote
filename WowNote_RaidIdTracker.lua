@@ -80,9 +80,10 @@ local function EnsureDB()
     if WowNote_Internal and WowNote_Internal.InitDB then
         WowNote_Internal.InitDB()
     end
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.raidIds = WowNoteDB.raidIds or {}
-    WowNoteDB.raidIds.characters = WowNoteDB.raidIds.characters or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.raidIds) ~= "table" then WowNoteDB.raidIds = {} end
+    if type(WowNoteDB.raidIds.characters) ~= "table" then WowNoteDB.raidIds.characters = {} end
+    if type(WowNoteDB.raidIds.liveBossKills) ~= "table" then WowNoteDB.raidIds.liveBossKills = {} end
     return WowNoteDB.raidIds
 end
 
@@ -478,7 +479,7 @@ local function RecordLiveEncounterProgress(instanceName, progress, reason)
 
     local db = EnsureDB()
     local charKey = GetPlayerKey()
-    db.liveBossKills = db.liveBossKills or {}
+    if type(db.liveBossKills) ~= "table" then db.liveBossKills = {} end
     db.liveBossKills[charKey] = db.liveBossKills[charKey] or {}
     db.liveBossKills[charKey][instanceName] = db.liveBossKills[charKey][instanceName] or {}
 
@@ -529,7 +530,7 @@ local function RecordLiveBossKill(bossName)
 
     local db = EnsureDB()
     local charKey = GetPlayerKey()
-    db.liveBossKills = db.liveBossKills or {}
+    if type(db.liveBossKills) ~= "table" then db.liveBossKills = {} end
     db.liveBossKills[charKey] = db.liveBossKills[charKey] or {}
     db.liveBossKills[charKey][instanceName] = db.liveBossKills[charKey][instanceName] or {}
     db.liveBossKills[charKey][instanceName][bossName] = time()
@@ -554,7 +555,8 @@ local function RecordLiveBossKill(bossName)
 end
 
 local function HandleCombatLogEvent(...)
-    local timestamp, subevent, arg3, sourceGUID, sourceName, sourceFlags, destGUID, destName = ...
+    -- WoW 3.3.5a combat log signature has no hideCaster argument.
+    local timestamp, subevent, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags = ...
 
     if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then
         RecordSaurfangPullFallback(sourceName, destName)
@@ -613,10 +615,41 @@ function RI.ScanCurrentCharacter()
             if old then
                 lock.firstSeenAt = old.firstSeenAt or now
                 lock.members = old.members or {}
-                if (#(lock.bosses or {}) == 0) and old.bosses then
-                    lock.bosses = old.bosses
-                    lock.numEncounters = old.numEncounters or lock.numEncounters
-                    lock.encounterProgress = old.encounterProgress or lock.encounterProgress
+                -- Always merge previously recorded/manual boss states. Saved-instance scans
+                -- can return partial encounter data and must not erase manual corrections.
+                if old.bosses then
+                    lock.bosses = lock.bosses or {}
+                    local currentByName = {}
+                    for _, boss in ipairs(lock.bosses) do
+                        currentByName[NormalizeBossName(CanonicalBossName(boss.name))] = boss
+                    end
+                    for _, oldBoss in ipairs(old.bosses) do
+                        local key = NormalizeBossName(CanonicalBossName(oldBoss.name))
+                        local current = currentByName[key]
+                        if current then
+                            if oldBoss.killed then current.killed = true end
+                            if oldBoss.manual then current.manual = true end
+                            if oldBoss.recordedLive then current.recordedLive = true end
+                        else
+                            local copy = {
+                                name = CanonicalBossName(oldBoss.name),
+                                killed = oldBoss.killed and true or false,
+                                manual = oldBoss.manual and true or false,
+                                recordedLive = oldBoss.recordedLive and true or false,
+                                inferred = oldBoss.inferred and true or false,
+                            }
+                            table.insert(lock.bosses, copy)
+                            currentByName[key] = copy
+                        end
+                    end
+                    local killedCount = 0
+                    for _, boss in ipairs(lock.bosses) do
+                        if boss.killed then killedCount = killedCount + 1 end
+                    end
+                    lock.numEncounters = math.max(tonumber(lock.numEncounters or 0) or 0, tonumber(old.numEncounters or 0) or 0, #lock.bosses)
+                    lock.encounterProgress = math.max(tonumber(lock.encounterProgress or 0) or 0, killedCount)
+                    lock.manualBossUpdatedAt = old.manualBossUpdatedAt
+                    lock.liveBossUpdatedAt = old.liveBossUpdatedAt
                 end
             end
             MergeLiveBossKillsIntoLock(db, charKey, lock)
@@ -734,7 +767,7 @@ local function CreateRaidRow(parent, index)
     row.bg = row:CreateTexture(nil, "BACKGROUND")
     row.bg:SetAllPoints(row)
     row.bg:SetTexture(0.10, 0.08, 0.04, 0.25)
-    row:SetHighlightTexture("Interface\QuestFrame\UI-QuestTitleHighlight")
+    row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
     row:SetScript("OnMouseDown", function(self)
         selectedRaidIndex = self.index
         RI.RefreshUI()
@@ -1163,6 +1196,8 @@ local function CreateUI()
     frame:SetSize(840, 500)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
@@ -1271,7 +1306,9 @@ local function CreateUI()
     frame.editBossButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 720, -386)
     frame.editBossButton:SetScript("OnClick", function()
         if not frame.bossEditor then return end
+        frame.bossEditor:SetFrameLevel((frame:GetFrameLevel() or 1) + 20)
         frame.bossEditor:Show()
+        frame.bossEditor:Raise()
         RefreshBossEditor()
     end)
     frame.editBossButton:Hide()
@@ -1279,10 +1316,12 @@ local function CreateUI()
     frame.bossEditor = CreateFrame("Frame", nil, frame)
     frame.bossEditor:SetSize(640, 142)
     frame.bossEditor:SetPoint("CENTER", frame, "CENTER", 70, -80)
-    frame.bossEditor:SetFrameStrata("TOOLTIP")
+    frame.bossEditor:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame.bossEditor:SetFrameLevel((frame:GetFrameLevel() or 1) + 20)
+    frame.bossEditor:EnableMouse(true)
     frame.bossEditor:SetBackdrop({
-        bgFile = "Interface\Tooltips\UI-Tooltip-Background",
-        edgeFile = "Interface\Tooltips\UI-Tooltip-Border",
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
         tile = true, tileSize = 16, edgeSize = 14,
         insets = { left = 4, right = 4, top = 4, bottom = 4 },
     })
@@ -1301,6 +1340,9 @@ local function CreateUI()
     frame.bossEditor.buttons = {}
     for i = 1, 12 do
         local bossButton = CreateFrame("CheckButton", nil, frame.bossEditor, "UICheckButtonTemplate")
+        bossButton:SetFrameLevel(frame.bossEditor:GetFrameLevel() + 2)
+        bossButton:EnableMouse(true)
+        bossButton:RegisterForClicks("LeftButtonUp")
         bossButton:SetSize(22, 22)
         local col = (i - 1) % 3
         local row = math.floor((i - 1) / 3)

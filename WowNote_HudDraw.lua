@@ -41,19 +41,25 @@ end
 
 local function SetFront(f)
     if not f then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(f)
+        return
+    end
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(910)
+    f:SetFrameLevel(100)
+    if f.SetToplevel then f:SetToplevel(true) end
+    if f.Raise then f:Raise() end
 end
 
 local function EnsureDB()
-    WowNoteCharDB = WowNoteCharDB or {}
-    WowNoteCharDB.hudDraw = WowNoteCharDB.hudDraw or {}
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.hudDraw) ~= "table" then WowNoteCharDB.hudDraw = {} end
     hudScale = tonumber(WowNoteCharDB.hudDraw.scale) or hudScale
 end
 
 local function SaveDB()
-    WowNoteCharDB = WowNoteCharDB or {}
-    WowNoteCharDB.hudDraw = WowNoteCharDB.hudDraw or {}
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.hudDraw) ~= "table" then WowNoteCharDB.hudDraw = {} end
     WowNoteCharDB.hudDraw.scale = hudScale
 end
 
@@ -146,7 +152,7 @@ local function CreateUI()
     hudFrame = CreateFrame("Frame", "WowNoteHudDrawOverlay", UIParent)
     hudFrame:SetAllPoints(UIParent)
     hudFrame:SetFrameStrata("FULLSCREEN")
-    hudFrame:SetFrameLevel(830)
+    hudFrame:SetFrameLevel(20)
     hudFrame:EnableMouse(false)
     hudFrame:SetScript("OnUpdate", RenderHUD)
 
@@ -167,10 +173,9 @@ local function CreateUI()
     title:SetText("WowNote Tactical HUD")
     local close = CreateFrame("Button", nil, controlFrame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
-    -- Keep the close button above the HUD control frame background. The HUD
-    -- overlay uses very high frame levels, so the template close button must be
-    -- lifted explicitly or it can appear disabled / stop receiving clicks.
-    close:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 80)
+    -- Keep the close button slightly above the HUD control frame background
+    -- without forcing the whole window above unrelated dialogs.
+    close:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 10)
     close:EnableMouse(true)
     close:Enable()
     close:SetScript("OnMouseDown", function() controlFrame:Hide() end)

@@ -45,7 +45,7 @@ local BLESSING_NAMES = {
 
 local DEFAULT_BLESSING_ICONS = {
     [1] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofWisdom",
-    [2] = "Interface\\Icons\\Ability_Warrior_BattleShout",
+    [2] = "Interface\\Icons\\Spell_Holy_FistOfJustice",
     [3] = "Interface\\Icons\\Spell_Magic_GreaterBlessingofKings",
     [4] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofSanctuary",
 }
@@ -85,12 +85,12 @@ local DEFAULT_CLASS_ICONS = {
     [11] = "Interface\\AddOns\\WoWNote\\Icons\\Pet",
 }
 
-AllPallys = AllPallys or {}
-SyncList = SyncList or {}
-ChatControl = ChatControl or {}
-PallyPower_Assignments = PallyPower_Assignments or {}
-PallyPower_NormalAssignments = PallyPower_NormalAssignments or {}
-PallyPower_AuraAssignments = PallyPower_AuraAssignments or {}
+if type(AllPallys) ~= "table" then AllPallys = {} end
+if type(SyncList) ~= "table" then SyncList = {} end
+if type(ChatControl) ~= "table" then ChatControl = {} end
+if type(PallyPower_Assignments) ~= "table" then PallyPower_Assignments = {} end
+if type(PallyPower_NormalAssignments) ~= "table" then PallyPower_NormalAssignments = {} end
+if type(PallyPower_AuraAssignments) ~= "table" then PallyPower_AuraAssignments = {} end
 PP_Symbols = PP_Symbols or 0
 
 local SAMPLE_PALLIES = { "Sampleadin", "Bufflord" }
@@ -264,8 +264,8 @@ local function IncomingCanControl(sender, targetName)
 end
 
 EnsureConfig = function()
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.pallyCompat = WowNoteDB.pallyCompat or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.pallyCompat) ~= "table" then WowNoteDB.pallyCompat = {} end
     if WowNoteDB.pallyCompat.testMode == nil then
         WowNoteDB.pallyCompat.testMode = false
     end
@@ -1778,7 +1778,9 @@ local function CreateUI()
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
-    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:SetBackdrop({
         bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
         edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",

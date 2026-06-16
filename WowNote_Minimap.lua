@@ -5,14 +5,16 @@ local minimapDragging = false
 
 local function GetMinimapButtonAngle()
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     return WowNoteDB.minimap.angle or 225
 end
 
 local function SetMinimapButtonPosition(angle)
     if not minimapButton or not Minimap then return end
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     WowNoteDB.minimap.angle = angle
     local radius = 80
     local rad = math.rad(angle)
@@ -41,7 +43,8 @@ end
 function WowNote_CreateMinimapButton()
     if minimapButton or not Minimap then return end
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     if WowNoteDB.minimap.hide then return end
 
     local b = CreateFrame("Button", "WowNoteMinimapButton", Minimap)
@@ -98,7 +101,8 @@ end
 
 function WowNote_ShowMinimapButton()
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     WowNoteDB.minimap.hide = false
     WowNote_CreateMinimapButton()
     if minimapButton then minimapButton:Show() end
@@ -106,7 +110,8 @@ end
 
 function WowNote_HideMinimapButton()
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     WowNoteDB.minimap.hide = true
     if minimapButton then minimapButton:Hide() end
 end
@@ -114,7 +119,8 @@ end
 
 function WowNote_ApplyMinimapButtonVisibility()
     WowNote_Internal.InitDB()
-    WowNoteDB.minimap = WowNoteDB.minimap or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
     if WowNoteDB.minimap.hide then
         WowNote_HideMinimapButton()
     else

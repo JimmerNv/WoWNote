@@ -82,8 +82,8 @@ end
 
 local function EnsureDB()
     if WN.InitDB then WN.InitDB() end
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.characterNotes = WowNoteDB.characterNotes or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.characterNotes) ~= "table" then WowNoteDB.characterNotes = {} end
 
     if not accountMigrationDone then
         accountMigrationDone = true
@@ -175,7 +175,7 @@ local function CreateEditor()
     if editorFrame then return end
     editorFrame = CreateFrame("Frame", "WowNoteCharacterNoteEditor", UIParent)
     editorFrame:SetWidth(360); editorFrame:SetHeight(210); editorFrame:SetPoint("CENTER")
-    editorFrame:SetFrameStrata("DIALOG"); editorFrame:SetMovable(true); editorFrame:EnableMouse(true)
+    editorFrame:SetFrameStrata("FULLSCREEN_DIALOG"); if editorFrame.SetToplevel then editorFrame:SetToplevel(true) end; editorFrame:SetFrameLevel(100); editorFrame:SetMovable(true); editorFrame:EnableMouse(true)
     editorFrame:RegisterForDrag("LeftButton")
     editorFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     editorFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -240,7 +240,7 @@ function WowNote_ShowCharacterNote(name, realm)
     if not noteFrame then
         noteFrame = CreateFrame("Frame", "WowNoteCharacterNoteView", UIParent)
         noteFrame:SetWidth(340); noteFrame:SetHeight(170); noteFrame:SetPoint("CENTER")
-        noteFrame:SetFrameStrata("DIALOG"); noteFrame:SetMovable(true); noteFrame:EnableMouse(true)
+        noteFrame:SetFrameStrata("FULLSCREEN_DIALOG"); if noteFrame.SetToplevel then noteFrame:SetToplevel(true) end; noteFrame:SetFrameLevel(100); noteFrame:SetMovable(true); noteFrame:EnableMouse(true)
         noteFrame:RegisterForDrag("LeftButton")
         noteFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
         noteFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -302,7 +302,7 @@ function WowNote_OpenCharacterNotes()
     if not listFrame then
         listFrame = CreateFrame("Frame", "WowNoteCharacterNotesFrame", UIParent)
         listFrame:SetWidth(420); listFrame:SetHeight(420); listFrame:SetPoint("CENTER")
-        listFrame:SetFrameStrata("DIALOG"); listFrame:SetMovable(true); listFrame:EnableMouse(true)
+        listFrame:SetFrameStrata("FULLSCREEN_DIALOG"); if listFrame.SetToplevel then listFrame:SetToplevel(true) end; listFrame:SetFrameLevel(100); listFrame:SetMovable(true); listFrame:EnableMouse(true)
         listFrame:RegisterForDrag("LeftButton")
         listFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
         listFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)

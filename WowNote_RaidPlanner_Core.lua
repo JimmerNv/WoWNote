@@ -31,7 +31,6 @@ RP.roleLabels = {
 
 function WowNote_RaidPlanner_SetStatus(text)
     if RP.statusText then RP.statusText:SetText(text or "") end
-    if statusText then statusText:SetText(text or "") end
 end
 
 function WowNote_RaidPlanner_GetText(edit, fallback)

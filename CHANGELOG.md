@@ -1,3 +1,79 @@
+## 1.14.59
+
+- Restored the original `_Cursor` 3.3.0.2 fullscreen model viewport semantics instead of parenting cursor models to the WowNote/UIParent frame.
+- Cursor controller is parentless again and each model uses `SetAllPoints(nil)`, matching the known-working standalone addon.
+- Removed the v1.14.58 custom projection/reset layer that did not change the in-game displacement and could alter model rendering on ultrawide layouts.
+- Restored the original cursor positioning and trail animation lifecycle while retaining WowNote settings, menu integration, and duplicate-addon suppression.
+- Re-ran all 17 module-flow tests plus fresh, existing, and malformed SavedVariables initialization scenarios.
+
+## 1.14.58
+
+- Fixed Cursor Effects rendering against an unanchored parent frame, which could stretch or offset effects on ultrawide resolutions.
+- Anchored the integrated cursor viewport explicitly to `UIParent` and anchored every model layer to that viewport.
+- Positions cursor models before showing them to prevent trails from drawing a long line from the screen origin.
+- Recalculates cursor projection metrics when resolution or UI scale changes.
+- Resets trail animations after activation, display changes, alt-tab-sized cursor jumps, cinematics, and mouselook transitions.
+- Re-ran the complete WowNote release-gate suite across initialization, SavedVariables, menus, windows, slash commands, and all modules.
+
+## 1.14.57
+
+- Added a full release-gate run across all WowNote modules using a Lua 5.1 / WoW 3.3.5a API mock environment.
+- Tested fresh, existing, and malformed SavedVariables initialization scenarios.
+- Tested all public window openers, main-menu and submenu routing, slash commands, and frame stacking/clickability constraints.
+- Exercised Notes and Character Notes CRUD, Bank Viewer selection/search/tooltips, Item Snapshots, Item Tracker/Restock, Loot Tools, Auto Sell/Repair/Roll, Mail Open All, Manabonk cleanup, Raid Planner, Raid IDs, PallyBuffs, Port Helper, Cursor Effects, Tactical UI, Talent Planner, Minimap, Social protections, and data-transfer round trips.
+- Fixed the main-menu `Send / Receive` action by exporting `WowNote_OpenShare` from its module-local implementation.
+- Removed a stray undeclared `statusText` global reference from the Raid Planner status updater.
+- Re-ran syntax, TOC, initialization, targeted module-flow, and final package verification after the fixes.
+
+## 1.14.56
+
+- Integrated Cursor Effects into WowNote as a native Quality of Life tool.
+- Added a dedicated `Cursor Effects` entry to the Quality of Life submenu.
+- Added a standalone WowNote-styled cursor configuration window with presets, layers, preview, offsets, scale, facing, custom model paths, saved sets, apply, and reset controls.
+- Stores saved sets account-wide and active cursor layers per character inside the existing WowNote SavedVariables.
+- Added `/wn cursor` and `/wncursor` shortcuts.
+- Added a module toggle for Cursor Effects and preserved automatic hiding during screenshots, cinematics, camera movement, and mouselook.
+- Namespaced all frames, globals, popups, and slash commands to avoid collisions with a separately installed `_Cursor` addon.
+- Migrates existing `_Cursor` saved sets and character layers when available, and suppresses duplicate standalone cursor effects while the integrated module is enabled.
+- Based on `_Cursor` 3.3.0.2 by Saiket.
+
+## 1.14.55
+
+- Hardened account-wide and per-character SavedVariables initialization across all modules.
+- Added type validation for module settings, minimap data, character notes, tactical maps, PallyBuffs assignments, Raid ID data, Port Helper state, snapshots, and HUD settings.
+- Prevents startup failures when older, incomplete, or malformed nested SavedVariables values are present.
+- Verified fresh-install startup, existing-data preservation, malformed-data recovery, TOC load order, all public UI openers, core events, slash commands, and Lua syntax with a WoW 3.3.5a API mock harness.
+
+## 1.14.54
+
+- Standardized WowNote dialog stacking to avoid windows blocking unrelated UI elements.
+- Replaced the Bank Viewer `TOOLTIP`/level 1000 setup with a normal top-level dialog configuration.
+- Removed unbounded frame-level escalation and use bounded dialog levels plus `Raise()` instead.
+- Reduced excessive child-frame offsets in Loot Tools, menus, Raid ID editing, Screen Draw, Tactical Board, and Tactical HUD controls.
+- Kept full-screen drawing overlays mouse-transparent outside explicit draw mode.
+- Added consistent base levels to the main editor, transfer dialogs, Character Notes, Item Tracker, Restock, Raid Planner, Port Helper, PallyBuffs, and other standalone windows.
+- Corrected the Raid ID row highlight texture path discovered during the full Lua syntax audit.
+
+## 1.14.49
+
+- Refined the Raid Planner Port Helper layout.
+- Moved the message field to its own full-width row.
+- Increased the channel field width and aligned labels and inputs consistently.
+- Shifted controls and request rows downward to avoid visual crowding.
+
+## 1.14.48
+
+- Port Helper now automatically removes summon requests after the player remains within approximate 40-yard group range for 0.75 seconds.
+- Added a short confirmation delay to avoid removing entries because of a single transient range update.
+
+## 1.14.42
+
+- Added a Raid Planner Port Helper with configurable reply code, chat channel, and announcement text.
+- Added typo-tolerant summon request detection for permutations such as `123`, `132`, and `1 2 3`.
+- Added one clickable character button per request to target the player for summoning.
+- Added group, offline, and approximate in-range status updates plus right-click removal.
+- Added `/wnport` to open the Port Helper directly.
+
 # v1.14.41
 
 - Reworked PostalLite Open All for Auction House item mails.
@@ -206,3 +282,11 @@ This project went through several transport experiments:
 - Channel payload escaping for WoW chat safety
 
 On the tested server, reliable user-facing share behavior could not be guaranteed because server-side chat throttling/muting interfered with larger transfers. The UI therefore no longer exposes the Share workflow.
+
+## 1.14.44
+
+- Added explicit Start Tracking / Stop Tracking controls to the Raid Planner Port Helper GUI.
+- Posting a port request now starts tracking automatically.
+- Added `/wnport start` and `/wnport stop` commands.
+- Chat requests and periodic range refreshes are ignored while tracking is stopped.
+- Added a visible tracking status indicator to the Port Helper window.
