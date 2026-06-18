@@ -10,7 +10,15 @@ local statusText
 local selectedCharKey
 local selectedRaidIndex = nil
 local scanFrame = CreateFrame("Frame", "WowNoteRaidIdTrackerEventFrame")
+local combatProbeFrame = CreateFrame("Frame", "WowNoteRaidIdTrackerCombatProbeFrame")
+combatProbeFrame:Hide()
+local postEncounterFrame = CreateFrame("Frame", "WowNoteRaidIdTrackerPostEncounterFrame")
+postEncounterFrame:Hide()
 local pendingScan = false
+local combatLogMonitoring = false
+local activeEncounter = nil
+local encounterProbeAttempts = 0
+local encounterScanPending = false
 local ScheduleScan
 local MergePostedRaidIdData
 local RefreshBossEditor
@@ -206,6 +214,9 @@ local BOSS_ALIASES = {
     ["dbs"] = "Deathbringer Saurfang",
     ["saurfang"] = "Deathbringer Saurfang",
     ["todesbringer saurfang"] = "Deathbringer Saurfang",
+    ["prince valanar"] = "Blood Prince Council",
+    ["prince taldaram"] = "Blood Prince Council",
+    ["prince keleseth"] = "Blood Prince Council",
 }
 
 local KNOWN_RAID_BOSSES = {
@@ -288,6 +299,31 @@ local KNOWN_RAID_BOSSES = {
     ["onyxia"] = true,
 }
 
+local BOSS_CREATURE_IDS = {
+    [36612] = "Lord Marrowgar",
+    [36855] = "Lady Deathwhisper",
+    [37813] = "Deathbringer Saurfang",
+    [36626] = "Festergut",
+    [36627] = "Rotface",
+    [36678] = "Professor Putricide",
+    [37970] = "Blood Prince Council",
+    [37972] = "Blood Prince Council",
+    [37973] = "Blood Prince Council",
+    [37955] = "Blood-Queen Lana'thel",
+    [36789] = "Valithria Dreamwalker",
+    [36853] = "Sindragosa",
+    [36597] = "The Lich King",
+}
+
+local function GetCreatureIdFromGuid(guid)
+    if type(guid) ~= "string" then return nil end
+    local legacyId = string.match(guid, "0xF130(%x%x%x%x%x%x)")
+    if legacyId then return tonumber(legacyId, 16) end
+    local unitType, _, _, _, _, creatureId = string.match(guid, "^(%w+)%-(%x+)%-(%x+)%-(%x+)%-(%x+)%-(%x+)")
+    if unitType and creatureId then return tonumber(creatureId, 16) end
+    return nil
+end
+
 local function NormalizeBossName(name)
     return string.lower(Trim(name or ""))
 end
@@ -301,6 +337,19 @@ end
 local function IsKnownRaidBoss(name)
     local normalized = NormalizeBossName(CanonicalBossName(name))
     return normalized ~= "" and KNOWN_RAID_BOSSES[normalized] == true
+end
+
+local function GetKnownBossFromUnit(unit)
+    if not UnitExists or not UnitExists(unit) then return nil end
+    local guid = UnitGUID and UnitGUID(unit) or nil
+    local creatureId = GetCreatureIdFromGuid(guid)
+    local mappedName = creatureId and BOSS_CREATURE_IDS[creatureId] or nil
+    local unitName = UnitName and UnitName(unit) or nil
+    if mappedName then return mappedName, guid, creatureId end
+    if unitName and IsKnownRaidBoss(unitName) then
+        return CanonicalBossName(unitName), guid, creatureId
+    end
+    return nil
 end
 
 local function AddFallbackEncounterProgress(instanceName, bosses, total, progress)
@@ -447,6 +496,106 @@ local function GetCurrentRaidInstanceName()
     return context and context.name or nil
 end
 
+local function IsSupportedRaidInstance()
+    local instanceName = GetCurrentRaidInstanceName and GetCurrentRaidInstanceName() or nil
+    if instanceName and INSTANCE_BOSS_ORDER[NormalizeBossName(instanceName)] then return true end
+    if IsInInstance then
+        local inInstance, kind = IsInInstance()
+        if inInstance and kind == "raid" then return true end
+    end
+    return false
+end
+
+local function FindKnownBossTarget()
+    local bossName, guid, creatureId = GetKnownBossFromUnit("target")
+    if bossName then return bossName, guid, creatureId end
+    bossName, guid, creatureId = GetKnownBossFromUnit("focus")
+    if bossName then return bossName, guid, creatureId end
+
+    local raidCount = GetNumRaidMembers and GetNumRaidMembers() or 0
+    for i = 1, raidCount do
+        bossName, guid, creatureId = GetKnownBossFromUnit("raid" .. i .. "target")
+        if bossName then return bossName, guid, creatureId end
+    end
+
+    local partyCount = GetNumPartyMembers and GetNumPartyMembers() or 0
+    for i = 1, partyCount do
+        bossName, guid, creatureId = GetKnownBossFromUnit("party" .. i .. "target")
+        if bossName then return bossName, guid, creatureId end
+    end
+    return nil
+end
+
+local function SetCombatLogMonitoring(enabled)
+    enabled = enabled and activeEncounter ~= nil and IsSupportedRaidInstance() and true or false
+    if enabled == combatLogMonitoring then return end
+    combatLogMonitoring = enabled
+    if enabled then
+        scanFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    else
+        scanFrame:UnregisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+    end
+end
+
+local function BeginBossEncounter()
+    if not IsSupportedRaidInstance() then return false end
+    local bossName, guid, creatureId = FindKnownBossTarget()
+    if not bossName then return false end
+
+    activeEncounter = {
+        bossName = CanonicalBossName(bossName),
+        guid = guid,
+        creatureId = creatureId,
+        instanceName = GetCurrentRaidInstanceName(),
+        startedAt = GetTime and GetTime() or (time and time() or 0),
+        deathSeen = false,
+    }
+    SetCombatLogMonitoring(true)
+    return true
+end
+
+local function SchedulePostEncounterScan()
+    if encounterScanPending then return end
+    encounterScanPending = true
+    postEncounterFrame.elapsed = 0
+    WowNoteProfiler_SetScript(postEncounterFrame, "OnUpdate", "RaidIds.PostEncounterScan", function(self, delta)
+        self.elapsed = (self.elapsed or 0) + (delta or 0)
+        if self.elapsed < 2.0 then return end
+        WowNoteProfiler_SetScript(self, "OnUpdate", "RaidIds.DynamicWorker", nil)
+        self:Hide()
+        encounterScanPending = false
+        if RequestRaidInfo then RequestRaidInfo() end
+        ScheduleScan()
+    end)
+    postEncounterFrame:Show()
+end
+
+local function FinishBossEncounter()
+    local encounter = activeEncounter
+    activeEncounter = nil
+    SetCombatLogMonitoring(false)
+    encounterProbeAttempts = 0
+    if encounter then
+        SchedulePostEncounterScan()
+    end
+end
+
+local function ScheduleEncounterProbe()
+    encounterProbeAttempts = 0
+    combatProbeFrame.elapsed = 0
+    WowNoteProfiler_SetScript(combatProbeFrame, "OnUpdate", "RaidIds.CombatProbe", function(self, delta)
+        self.elapsed = (self.elapsed or 0) + (delta or 0)
+        if self.elapsed < 0.5 then return end
+        self.elapsed = 0
+        encounterProbeAttempts = encounterProbeAttempts + 1
+        if BeginBossEncounter() or encounterProbeAttempts >= 3 or not (InCombatLockdown and InCombatLockdown()) then
+            WowNoteProfiler_SetScript(self, "OnUpdate", "RaidIds.DynamicWorker", nil)
+            self:Hide()
+        end
+    end)
+    combatProbeFrame:Show()
+end
+
 local function ShouldAttachCurrentGroupToLock(lock, context)
     if not lock or not context or not context.name then return false end
     if tostring(lock.name or "") ~= tostring(context.name or "") then return false end
@@ -549,22 +698,24 @@ local function RecordLiveBossKill(bossName)
         statusText:SetText("Recorded boss kill: " .. bossName .. " (" .. instanceName .. ").")
     end
     if RI.RefreshUI then RI.RefreshUI() end
-    if RequestRaidInfo then RequestRaidInfo() end
-    ScheduleScan()
     return true
 end
 
 local function HandleCombatLogEvent(...)
+    if not combatLogMonitoring or not activeEncounter then return end
     -- WoW 3.3.5a combat log signature has no hideCaster argument.
-    local timestamp, subevent, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags = ...
+    local timestamp, subevent, sourceGUID, sourceName, sourceFlags, destGUID, destName = ...
+    if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then return end
 
-    if subevent ~= "UNIT_DIED" and subevent ~= "PARTY_KILL" then
-        RecordSaurfangPullFallback(sourceName, destName)
-        return
+    local creatureId = GetCreatureIdFromGuid(destGUID)
+    local bossName = creatureId and BOSS_CREATURE_IDS[creatureId] or nil
+    if not bossName and type(destName) == "string" and IsKnownRaidBoss(destName) then
+        bossName = CanonicalBossName(destName)
     end
+    if not bossName then return end
 
-    if type(destName) ~= "string" or destName == "" then return end
-    RecordLiveBossKill(destName)
+    activeEncounter.deathSeen = true
+    RecordLiveBossKill(bossName)
 end
 
 function RI.ScanCurrentCharacter()
@@ -586,8 +737,9 @@ function RI.ScanCurrentCharacter()
     entry.updatedAt = now
     entry.raids = {}
 
-    if RequestRaidInfo then RequestRaidInfo() end
-
+    -- RequestRaidInfo is triggered by world entry, boss progress and the manual
+    -- refresh button. Calling it from the scan itself would cause an
+    -- UPDATE_INSTANCE_INFO -> scan -> RequestRaidInfo feedback loop.
     local count = GetNumSavedInstances and GetNumSavedInstances() or 0
     for i = 1, count do
         local name, id, reset, difficulty, locked, extended, instanceIDMostSig, isRaid, maxPlayers, difficultyName, numEncounters, encounterProgress = GetSavedInstanceInfo(i)
@@ -680,10 +832,10 @@ ScheduleScan = function()
     if pendingScan then return end
     pendingScan = true
     local elapsed = 0
-    scanFrame:SetScript("OnUpdate", function(self, delta)
+    WowNoteProfiler_SetScript(scanFrame, "OnUpdate", "RaidIds.DelayedScan", function(self, delta)
         elapsed = elapsed + delta
         if elapsed >= 1.0 then
-            self:SetScript("OnUpdate", nil)
+            WowNoteProfiler_SetScript(self, "OnUpdate", "RaidIds.DynamicWorker", nil)
             pendingScan = false
             RI.ScanCurrentCharacter()
         end
@@ -701,8 +853,9 @@ scanFrame:RegisterEvent("CHAT_MSG_CHANNEL")
 scanFrame:RegisterEvent("CHAT_MSG_WHISPER")
 scanFrame:RegisterEvent("CHAT_MSG_YELL")
 scanFrame:RegisterEvent("CHAT_MSG_SAY")
-scanFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-scanFrame:SetScript("OnEvent", function(self, event, ...)
+scanFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+scanFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+WowNoteProfiler_SetScript(scanFrame, "OnEvent", "RaidIds.Events", function(self, event, ...)
     if string.find(tostring(event or ""), "^CHAT_MSG_") then
         local message, sender = ...
         MergePostedRaidIdData(message, sender)
@@ -710,8 +863,28 @@ scanFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
         HandleCombatLogEvent(...)
         return
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        activeEncounter = nil
+        SetCombatLogMonitoring(false)
+        if not BeginBossEncounter() then
+            ScheduleEncounterProbe()
+        end
+        return
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        WowNoteProfiler_SetScript(combatProbeFrame, "OnUpdate", "RaidIds.CombatProbe", nil)
+        combatProbeFrame:Hide()
+        FinishBossEncounter()
+        return
     end
     if event == "PLAYER_ENTERING_WORLD" then
+        activeEncounter = nil
+        encounterProbeAttempts = 0
+        encounterScanPending = false
+        WowNoteProfiler_SetScript(combatProbeFrame, "OnUpdate", "RaidIds.CombatProbe", nil)
+        combatProbeFrame:Hide()
+        WowNoteProfiler_SetScript(postEncounterFrame, "OnUpdate", "RaidIds.PostEncounterScan", nil)
+        postEncounterFrame:Hide()
+        SetCombatLogMonitoring(false)
         if RequestRaidInfo then RequestRaidInfo() end
         ScheduleScan()
     elseif event == "UPDATE_INSTANCE_INFO" or event == "RAID_ROSTER_UPDATE" or event == "PARTY_MEMBERS_CHANGED" then

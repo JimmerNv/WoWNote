@@ -889,6 +889,7 @@ end
 local function SendAddonWhisper(target, payload)
     if not SendAddonMessage then return false end
     local ok = pcall(SendAddonMessage, COMM_PREFIX, payload, "WHISPER", target)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WNOTE WHISPER", string.len(tostring(payload or "")), ok and true or false) end
     if commDebug then
         Print("DEBUG send WHISPER to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -898,6 +899,7 @@ end
 local function SendAddonChannel(channel, payload)
     if not SendAddonMessage then return false end
     local ok = pcall(SendAddonMessage, COMM_PREFIX, payload, channel)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WNOTE " .. tostring(channel or "?"), string.len(tostring(payload or "")), ok and true or false) end
     if commDebug then
         Print("DEBUG send " .. tostring(channel or "?") .. ": " .. tostring(payload or ""))
     end
@@ -910,6 +912,7 @@ local function SendChatWhisper(target, payload)
     if target == "" then return false end
     local text = CHAT_COMM_MARKER .. EscapeChatPayload(payload)
     local ok = pcall(SendChatMessage, text, "WHISPER", nil, target)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "CHAT WHISPER", string.len(text or ""), ok and true or false) end
     if commDebug then
         Print("DEBUG send CHAT-WHISPER to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -965,6 +968,7 @@ local function SendChatChannel(target, payload)
 
     local text = CHAT_COMM_MARKER .. target .. ":" .. EscapeChatPayload(payload)
     local ok = pcall(SendChatMessage, text, "CHANNEL", nil, number)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "CHAT CHANNEL", string.len(text or ""), ok and true or false) end
     if commDebug then
         Print("DEBUG send CHANNEL " .. COMM_CHANNEL_NAME .. " #" .. tostring(number or "?") .. " to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -1127,27 +1131,52 @@ local function RequestMissingPackets(sender, transfer, reason)
     return true
 end
 
-local function EnsureCommMaintenanceFrame()
-    if commMaintenanceFrame or not CreateFrame then return end
-    commMaintenanceFrame = CreateFrame("Frame")
-    commMaintenanceFrame.elapsed = 0
-    commMaintenanceFrame:SetScript("OnUpdate", function(self, elapsed)
-        self.elapsed = (self.elapsed or 0) + (elapsed or 0)
-        if self.elapsed < 1.0 then return end
-        self.elapsed = 0
+local function HasIncompleteIncomingTransfers()
+    local id, transfer
+    for id, transfer in pairs(incomingTransfers) do
+        if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
+            return true
+        end
+    end
+    return false
+end
 
-        local now = time and time() or 0
-        local id, transfer
-        for id, transfer in pairs(incomingTransfers) do
-            if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
-                local lastPacket = transfer.lastPacketAt or transfer.started or now
-                local lastMissing = transfer.lastMissingRequest or 0
-                if now - lastPacket >= 4 and now - lastMissing >= 4 then
-                    RequestMissingPackets(transfer.sender, transfer, "timeout")
+local function EnsureCommMaintenanceFrame()
+    if not CreateFrame then return end
+    if not commMaintenanceFrame then
+        commMaintenanceFrame = CreateFrame("Frame")
+        commMaintenanceFrame:Hide()
+        commMaintenanceFrame.elapsed = 0
+        WowNoteProfiler_SetScript(commMaintenanceFrame, "OnUpdate", "Core.CommMaintenance", function(self, elapsed)
+            self.elapsed = (self.elapsed or 0) + (elapsed or 0)
+            if self.elapsed < 1.0 then return end
+            self.elapsed = 0
+
+            local now = time and time() or 0
+            local id, transfer
+            local hasIncomplete = false
+            for id, transfer in pairs(incomingTransfers) do
+                if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
+                    hasIncomplete = true
+                    local lastPacket = transfer.lastPacketAt or transfer.started or now
+                    local lastMissing = transfer.lastMissingRequest or 0
+                    if now - lastPacket >= 4 and now - lastMissing >= 4 then
+                        RequestMissingPackets(transfer.sender, transfer, "timeout")
+                    end
                 end
             end
-        end
-    end)
+            if not hasIncomplete then
+                self:Hide()
+            end
+        end)
+    end
+
+    if HasIncompleteIncomingTransfers() then
+        commMaintenanceFrame.elapsed = 0
+        commMaintenanceFrame:Show()
+    else
+        commMaintenanceFrame:Hide()
+    end
 end
 
 local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -1451,7 +1480,7 @@ function WowNote_OpenNoteImportExportDialog(mode, initialText, status)
                 ScrollingEdit_OnCursorChanged(self, x, y, w, h)
             end
         end)
-        WowNoteImportExportEditBox:SetScript("OnUpdate", function(self, elapsed)
+        WowNoteProfiler_SetScript(WowNoteImportExportEditBox, "OnUpdate", "Core.ImportExportEdit", function(self, elapsed)
             if ScrollingEdit_OnUpdate then
                 ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
             end
@@ -2056,6 +2085,9 @@ local function StoreReceivedNote(sender, transfer)
     InitDB()
     local item = DecodeTransferItem(transfer)
     incomingTransfers[transfer.id] = nil
+    if commMaintenanceFrame and not HasIncompleteIncomingTransfers() then
+        commMaintenanceFrame:Hide()
+    end
 
     if type(item) ~= "table" then
         Print("Received WowNote data could not be decoded.")
@@ -2100,6 +2132,7 @@ end
 
 HandleAddonMessage = function(prefix, message, channel, sender)
     if prefix ~= COMM_PREFIX or type(message) ~= "string" then return end
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", "WNOTE " .. tostring(channel or "?"), string.len(message), true) end
 
     if commDebug then
         Print("DEBUG recv from " .. tostring(sender or "?") .. " via " .. tostring(channel or "?") .. ": " .. tostring(message or ""))
@@ -2718,7 +2751,7 @@ CreateUI = function()
             ScrollingEdit_OnCursorChanged(self, x, y, w, h)
         end
     end)
-    contentEdit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(contentEdit, "OnUpdate", "Core.NoteEditor", function(self, elapsed)
         if ScrollingEdit_OnUpdate then
             ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
         end
@@ -2810,15 +2843,54 @@ WowNote_Internal.CompressText = CompressText
 WowNote_Internal.DecompressText = DecompressText
 
 local function WowNote_LoadItemModule()
+local wowNoteChatEditInsertLink = nil
+local modifiedItemHookInstalled = false
+local lastInsertedLink = nil
+local lastInsertedAt = -1
+
+local function TryInsertLinkIntoCurrentNote(text)
+    if not (frame and frame:IsShown() and contentEdit) then
+        return false
+    end
+    if type(text) ~= "string" or text == "" then
+        return false
+    end
+
+    InsertTextIntoEditor(text)
+    lastInsertedLink = text
+    lastInsertedAt = GetTime and GetTime() or 0
+    return true
+end
+
 HookItemLinks = function()
-    if originalChatEditInsertLink or not ChatEdit_InsertLink then return end
-    originalChatEditInsertLink = ChatEdit_InsertLink
-    ChatEdit_InsertLink = function(text)
-        if frame and frame:IsShown() and contentEdit and text then
-            InsertTextIntoEditor(text)
-            return true
+    if ChatEdit_InsertLink and ChatEdit_InsertLink ~= wowNoteChatEditInsertLink then
+        originalChatEditInsertLink = ChatEdit_InsertLink
+        wowNoteChatEditInsertLink = function(text)
+            if TryInsertLinkIntoCurrentNote(text) then
+                return true
+            end
+            if originalChatEditInsertLink then
+                return originalChatEditInsertLink(text)
+            end
+            return false
         end
-        return originalChatEditInsertLink(text)
+        ChatEdit_InsertLink = wowNoteChatEditInsertLink
+    end
+
+    -- Some inventory-style item buttons route modified clicks through
+    -- HandleModifiedItemClick without reaching ChatEdit_InsertLink when no chat
+    -- edit box is active. Use a secure post-hook instead of replacing the global
+    -- function, because replacing it can taint unrelated UI actions.
+    if hooksecurefunc and HandleModifiedItemClick and not modifiedItemHookInstalled then
+        local ok = pcall(hooksecurefunc, "HandleModifiedItemClick", function(link)
+            if not (link and IsModifiedClick and IsModifiedClick("CHATLINK")) then return end
+            local now = GetTime and GetTime() or 0
+            if lastInsertedLink == link and lastInsertedAt >= 0 and (now - lastInsertedAt) < 0.2 then
+                return
+            end
+            TryInsertLinkIntoCurrentNote(link)
+        end)
+        modifiedItemHookInstalled = ok and true or false
     end
 end
 
@@ -4107,6 +4179,13 @@ function WowNote_PrintHelp()
     Print("WowNote commands:")
     Print("/wn or /wownote - Toggle the main WowNote window.")
     Print("/wn help - Show this command overview.")
+    Print("/wn profile - Open the WowNote-only performance profiler (disabled by default).")
+    Print("/wn profile on/off - Enable or fully disable WowNote profiling load.")
+    Print("/wn profile report - Print a compact WowNote-only performance summary.")
+    Print("/wn profile timeline - Open selectable total/module/handler history with WowNote attribution.")
+    Print("/wn profile reset - Reset the current profiler session.")
+    Print("/wn profile mark <text> - Add a marker to the profiler timeline.")
+    Print("/wn profile detailed on/off - Toggle per-handler timing.")
     Print("/wn new - Open WowNote and create a new empty note.")
     Print("/wn share - Open the send/receive dialog with receiver-code protected note sharing.")
     Print("/wn talents - Open the talent planner.")
@@ -4162,6 +4241,11 @@ SlashCmdList["WOWNOTE"] = function(msg)
         WowNote_OpenShare()
     elseif lowerMsg == "settings" or lowerMsg == "optionen" or lowerMsg == "options" then
         if WowNote_OpenSettings then WowNote_OpenSettings() else Print("Settings module is not loaded.") end
+    elseif lowerMsg == "profile" or lowerMsg == "profiler" then
+        if WowNote_ProfilerHandleSlash then WowNote_ProfilerHandleSlash("") else Print("Profiler module is not loaded.") end
+    elseif string.sub(lowerMsg, 1, 8) == "profile " or string.sub(lowerMsg, 1, 9) == "profiler " then
+        local arguments = string.match(rawMsg, "^%S+%s+(.+)$") or ""
+        if WowNote_ProfilerHandleSlash then WowNote_ProfilerHandleSlash(arguments) else Print("Profiler module is not loaded.") end
     elseif lowerMsg == "characters" or lowerMsg == "characternotes" or lowerMsg == "playernotes" or lowerMsg == "spielernotizen" then
         if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end
     elseif lowerMsg == "talents" or lowerMsg == "talente" or lowerMsg == "talent" then
@@ -4352,6 +4436,7 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("Item Tracker", TITAN_ID, "WowNote_OpenItemTracker")
     TitanPanelRightClickMenu_AddCommand("Restock", TITAN_ID, "WowNote_OpenRestock")
     TitanPanelRightClickMenu_AddCommand("PallyBuffs", TITAN_ID, "WowNote_OpenPallyBuffs")
+    TitanPanelRightClickMenu_AddCommand("Profiler", TITAN_ID, "WowNote_OpenProfiler")
     TitanPanelRightClickMenu_AddCommand("Help", TITAN_ID, "WowNote_PrintHelp")
     TitanPanelRightClickMenu_AddCommand("Screen Draw", TITAN_ID, "WowNote_OpenScreenDraw")
     TitanPanelRightClickMenu_AddSpacer()
@@ -4370,7 +4455,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.12.0",
+        version = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version") or "1.14.73",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",
@@ -4418,7 +4503,7 @@ eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
 eventFrame:RegisterEvent("CHAT_MSG_CHANNEL")
 eventFrame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
-eventFrame:SetScript("OnEvent", function(self, event, addon, ...)
+WowNoteProfiler_SetScript(eventFrame, "OnEvent", "Core.Events", function(self, event, addon, ...)
     if event == "ADDON_LOADED" and addon == ADDON_NAME then
         InitDB()
         HookItemLinks()
@@ -4427,6 +4512,7 @@ eventFrame:SetScript("OnEvent", function(self, event, addon, ...)
         end
         CreateTitanPlugin()
     elseif event == "PLAYER_LOGIN" then
+        HookItemLinks()
         if RegisterAddonMessagePrefix then
             RegisterAddonMessagePrefix(COMM_PREFIX)
         end

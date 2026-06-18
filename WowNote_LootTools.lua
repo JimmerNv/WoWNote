@@ -196,7 +196,7 @@ local function MakeTextArea(parent, width, height, x, y)
     edit:SetScript("OnCursorChanged", function(self, cx, cy, cw, ch)
         if ScrollingEdit_OnCursorChanged then ScrollingEdit_OnCursorChanged(self, cx, cy, cw, ch) end
     end)
-    edit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(edit, "OnUpdate", "LootTools.EditBox", function(self, elapsed)
         if ScrollingEdit_OnUpdate then ScrollingEdit_OnUpdate(self, elapsed, self:GetParent()) end
     end)
     edit:SetScript("OnTextChanged", function(self)

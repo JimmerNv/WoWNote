@@ -214,7 +214,7 @@ do
 			CursorsPanel.Facing:SetValue( Cursor.Facing or 0 );
 
 			Preview.Cursor:Show();
-			Preview:SetScript( "OnUpdate", Preview.OnUpdate );
+			WowNoteProfiler_SetScript(Preview, "OnUpdate", "Cursor.OptionsPreview", Preview.OnUpdate);
 			Preview.Update();
 		else -- Clear and disable everything
 			CursorsPanel.DisableControls();
@@ -223,7 +223,7 @@ do
 			BlizzardOptionsPanel_CheckButton_Disable( Enabled );
 			Enabled:SetChecked( false );
 			Preview.Cursor:Hide();
-			Preview:SetScript( "OnUpdate", nil );
+			WowNoteProfiler_SetScript(Preview, "OnUpdate", "Cursor.OptionsPreview", nil);
 			Preview.Model:ClearModel();
 		end
 	end

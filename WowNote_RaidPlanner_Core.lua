@@ -133,41 +133,178 @@ function WowNote_RaidPlanner_UpdatePreview()
     return message
 end
 
-function WowNote_RaidPlanner_SendToConfiguredChannel(message)
-    local channel = WowNote_RaidPlanner_GetText(RP.channelEdit, "/2")
-    channel = string.lower(channel)
-    channel = string.gsub(channel, "^%s+", "")
-    channel = string.gsub(channel, "%s+$", "")
+local function SafeSendChatMessage(message, chatType, language, target)
+    if not SendChatMessage then return false, "Chat API is unavailable." end
+    local ok, result = pcall(SendChatMessage, message, chatType, language, target)
+    if not ok then return false, result end
+    if result == false then return false, "Chat message was rejected." end
+    return true
+end
 
-    if message == "" then
-        return false, "Message is empty."
-    end
+local function ResolveConfiguredChannel(token)
+    local original = Trim(token or "")
+    local channel = string.lower(original)
 
-    if channel == "/y" or channel == "y" or channel == "/yell" or channel == "yell" then
-        return pcall(SendChatMessage, message, "YELL")
+    if channel == "" then
+        return nil, "Channel is empty."
+    elseif channel == "/y" or channel == "y" or channel == "/yell" or channel == "yell" then
+        return { chatType = "YELL", label = original }
     elseif channel == "/s" or channel == "s" or channel == "/say" or channel == "say" then
-        return pcall(SendChatMessage, message, "SAY")
+        return { chatType = "SAY", label = original }
     elseif channel == "/g" or channel == "g" or channel == "/guild" or channel == "guild" then
-        return pcall(SendChatMessage, message, "GUILD")
+        return { chatType = "GUILD", label = original }
+    elseif channel == "/o" or channel == "o" or channel == "/officer" or channel == "officer" then
+        return { chatType = "OFFICER", label = original }
     elseif channel == "/p" or channel == "p" or channel == "/party" or channel == "party" then
-        return pcall(SendChatMessage, message, "PARTY")
+        return { chatType = "PARTY", label = original }
     elseif channel == "/r" or channel == "r" or channel == "/raid" or channel == "raid" then
-        return pcall(SendChatMessage, message, "RAID")
+        return { chatType = "RAID", label = original }
+    elseif channel == "/rw" or channel == "rw" or channel == "/raidwarning" or channel == "raidwarning" then
+        return { chatType = "RAID_WARNING", label = original }
+    elseif channel == "/bg" or channel == "bg" or channel == "/battleground" or channel == "battleground" then
+        return { chatType = "BATTLEGROUND", label = original }
     end
 
     local number = string.match(channel, "^/?(%d+)$")
     if number then
-        return pcall(SendChatMessage, message, "CHANNEL", nil, tonumber(number))
+        return { chatType = "CHANNEL", target = tonumber(number), label = original }
     end
 
     if GetChannelName then
-        local channelNumber = GetChannelName(channel)
+        local lookupName = string.gsub(original, "^/", "")
+        local channelNumber = GetChannelName(lookupName)
         if channelNumber and channelNumber ~= 0 then
-            return pcall(SendChatMessage, message, "CHANNEL", nil, channelNumber)
+            return { chatType = "CHANNEL", target = channelNumber, label = original }
         end
     end
 
-    return false, "Unknown channel: " .. tostring(channel)
+    return nil, "Unknown channel: " .. tostring(original)
+end
+
+local function ParseConfiguredChannels(text)
+    text = tostring(text or "")
+    text = string.gsub(text, "[,;+|\r\n\t]+", " ")
+
+    local channels = {}
+    local seen = {}
+    for token in string.gmatch(text, "%S+") do
+        local destination, err = ResolveConfiguredChannel(token)
+        if not destination then return nil, err end
+
+        local key = destination.chatType .. ":" .. tostring(destination.target or "")
+        if not seen[key] then
+            seen[key] = true
+            table.insert(channels, destination)
+        end
+    end
+
+    if table.getn(channels) == 0 then
+        return nil, "No post channel configured."
+    end
+    return channels
+end
+RP.ParseConfiguredChannels = ParseConfiguredChannels
+
+local function FinishRaidPostQueue()
+    local queue = RP.postQueue
+    if not queue then return end
+
+    if RP.postQueueFrame then
+        WowNoteProfiler_SetScript(RP.postQueueFrame, "OnUpdate", "RaidPlanner.PostQueue", nil)
+        RP.postQueueFrame:Hide()
+    end
+    RP.postQueue = nil
+    RP.postQueueActive = false
+
+    local total = queue.total or 0
+    local successCount = queue.successCount or 0
+    local failures = queue.failures or {}
+    if table.getn(failures) == 0 then
+        if total == 1 then
+            WowNote_RaidPlanner_SetStatus("Raid message posted.")
+        else
+            WowNote_RaidPlanner_SetStatus("Raid message posted to " .. tostring(total) .. " channels.")
+        end
+    elseif successCount > 0 then
+        WowNote_RaidPlanner_SetStatus("Posted to " .. tostring(successCount) .. " of " .. tostring(total)
+            .. " channels. Failed: " .. table.concat(failures, "; "))
+    else
+        WowNote_RaidPlanner_SetStatus("Could not post raid message. " .. table.concat(failures, "; "))
+    end
+end
+
+local function ProcessNextRaidPost()
+    local queue = RP.postQueue
+    if not queue then return end
+
+    local item = table.remove(queue.items, 1)
+    if not item then
+        FinishRaidPostQueue()
+        return
+    end
+
+    local ok, err = SafeSendChatMessage(queue.message, item.chatType, nil, item.target)
+    if ok then
+        queue.successCount = queue.successCount + 1
+    else
+        table.insert(queue.failures, tostring(item.label or item.chatType) .. " (" .. tostring(err or "unknown error") .. ")")
+    end
+
+    if table.getn(queue.items) == 0 then
+        FinishRaidPostQueue()
+    end
+end
+
+local function StartRaidPostQueue(message, channels)
+    if RP.postQueueActive then
+        return false, "A raid message is already being posted."
+    end
+
+    local total = table.getn(channels)
+    RP.postQueue = {
+        message = message,
+        items = channels,
+        total = total,
+        successCount = 0,
+        failures = {},
+        elapsed = 0,
+    }
+    RP.postQueueActive = true
+
+    -- Send the first destination immediately. Additional channels are delayed
+    -- slightly so identical cross-channel posts are not dropped by chat throttling.
+    ProcessNextRaidPost()
+    if RP.postQueueActive then
+        if not RP.postQueueFrame then
+            RP.postQueueFrame = CreateFrame("Frame")
+        end
+        WowNoteProfiler_SetScript(RP.postQueueFrame, "OnUpdate", "RaidPlanner.PostQueue", function(_, elapsed)
+            local queue = RP.postQueue
+            if not queue then return end
+            queue.elapsed = (queue.elapsed or 0) + (elapsed or 0)
+            if queue.elapsed < 0.75 then return end
+            queue.elapsed = queue.elapsed - 0.75
+            ProcessNextRaidPost()
+        end)
+        RP.postQueueFrame:Show()
+    end
+
+    return true, nil, total
+end
+
+function WowNote_RaidPlanner_SendToConfiguredChannel(message)
+    if message == "" then
+        return false, "Message is empty."
+    end
+    if not SendChatMessage then
+        return false, "Chat API is unavailable."
+    end
+
+    local configured = WowNote_RaidPlanner_GetText(RP.channelEdit, "/2")
+    local channels, err = ParseConfiguredChannels(configured)
+    if not channels then return false, err end
+
+    return StartRaidPostQueue(message, channels)
 end
 
 function WowNote_RaidPlanner_GetCurrentPresetData()
@@ -422,10 +559,10 @@ end
 
 function WowNote_RaidPlanner_Post()
     local message = WowNote_RaidPlanner_UpdatePreview()
-    local ok, err = WowNote_RaidPlanner_SendToConfiguredChannel(message)
-    if ok then
-        WowNote_RaidPlanner_SetStatus("Raid message posted.")
-    else
+    local ok, err, channelCount = WowNote_RaidPlanner_SendToConfiguredChannel(message)
+    if not ok then
         WowNote_RaidPlanner_SetStatus(err or "Could not post raid message.")
+    elseif RP.postQueueActive then
+        WowNote_RaidPlanner_SetStatus("Posting raid message to " .. tostring(channelCount or 0) .. " channels...")
     end
 end

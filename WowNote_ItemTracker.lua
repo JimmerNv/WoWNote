@@ -534,18 +534,15 @@ local function CreateUI()
 end
 
 function WowNote_OpenItemTracker()
-    InitDB(); CreateUI(); CreateHud(); frame:Show(); if WowNote_Internal and WowNote_Internal.RaiseFrame then WowNote_Internal.RaiseFrame(frame) end; WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
+    InitDB(); CreateUI(); CreateHud(); frame:Show(); if WowNote_Internal and WowNote_Internal.RaiseFrame then WowNote_Internal.RaiseFrame(frame) end
+    if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(true, false) end
+    WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
 end
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
-events:RegisterEvent("BAG_UPDATE")
-events:RegisterEvent("BAG_UPDATE_DELAYED")
-events:SetScript("OnEvent", function(self, event)
+WowNoteProfiler_SetScript(events, "OnEvent", "ItemTracker.Events", function(self, event)
     InitDB(); CreateHud()
-    if event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
-        if WowNote_ItemSnapshots_ScanNow then WowNote_ItemSnapshots_ScanNow() end
-    end
+    if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(false, false) end
     WowNote_ItemTracker_RefreshHud()
-    WowNote_ItemTracker_Evaluate(false)
 end)

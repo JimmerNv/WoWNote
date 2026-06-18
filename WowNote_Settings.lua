@@ -73,7 +73,13 @@ function WowNote_SetModuleEnabled(key, enabled)
     EnsureSettings()
     WowNoteDB.modules[key] = enabled and true or false
     if key == "mailFeatures" then ApplyMailModuleState(enabled) end
-    if key == "pallyBuffs" and not enabled and WowNotePallyPowerFrame then WowNotePallyPowerFrame:Hide() end
+    if key == "pallyBuffs" then
+        if WowNote_PallyBuffs_SetEnabled then
+            WowNote_PallyBuffs_SetEnabled(enabled)
+        elseif not enabled and WowNotePallyPowerFrame then
+            WowNotePallyPowerFrame:Hide()
+        end
+    end
     if key == "characterNotes" and not enabled and WowNoteCharacterNotesFrame then WowNoteCharacterNotesFrame:Hide() end
     if key == "cursorEffects" and WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(enabled) end
     if key == "biteHelper" and WowNote_BiteHelper_SetEnabled then WowNote_BiteHelper_SetEnabled(enabled) end
@@ -219,7 +225,7 @@ end
 
 local init = CreateFrame("Frame")
 init:RegisterEvent("PLAYER_LOGIN")
-init:SetScript("OnEvent", function()
+WowNoteProfiler_SetScript(init, "OnEvent", "Settings.Init", function()
     EnsureSettings()
     ApplyMailModuleState(WowNote_IsModuleEnabled("mailFeatures"))
     if WowNote_SetCursorEffectsModuleEnabled then WowNote_SetCursorEffectsModuleEnabled(WowNote_IsModuleEnabled("cursorEffects")) end

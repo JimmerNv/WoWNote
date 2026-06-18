@@ -11,6 +11,7 @@ local ROW_HEIGHT = 30
 local MAX_ROWS = 10
 local UPDATE_INTERVAL = 0.5
 local MESSAGE_PREFIX = "WoWNote- PortHelper:"
+local RefreshPortMonitoringState
 
 local function Trim(text)
     text = tostring(text or "")
@@ -120,6 +121,7 @@ local function SetTracking(enabled)
     local db = EnsureDB()
     db.tracking = enabled and true or false
     UpdateTrackingUI()
+    if RefreshPortMonitoringState then RefreshPortMonitoringState() end
     if WowNote_RaidPlanner_SetStatus then
         WowNote_RaidPlanner_SetStatus(db.tracking and "Port Helper tracking started." or "Port Helper tracking stopped.")
     end
@@ -286,7 +288,19 @@ local function SendConfiguredMessage()
     -- message into whisper or another channel selected in the Raid Planner.
     db.channel = "/raid"
     PH.channelEdit:SetText(db.channel)
-    local ok, err = pcall(SendChatMessage, text, "RAID")
+    local ok, err
+    if not SendChatMessage then
+        ok, err = false, "Chat API is unavailable."
+    else
+        local callOk, result = pcall(SendChatMessage, text, "RAID")
+        if not callOk then
+            ok, err = false, result
+        elseif result == false then
+            ok, err = false, "Chat message was rejected."
+        else
+            ok = true
+        end
+    end
 
     if ok then
         WowNote_RaidPlanner_SetStatus("Port request posted: " .. text)
@@ -466,6 +480,10 @@ local function CreateFrameUI()
         PH.channelEdit:SetText("/raid")
         PH.messageEdit:SetText(current.message)
         RefreshRows()
+        if RefreshPortMonitoringState then RefreshPortMonitoringState() end
+    end)
+    f:SetScript("OnHide", function()
+        if RefreshPortMonitoringState then RefreshPortMonitoringState() end
     end)
     f:Hide()
 end
@@ -483,32 +501,58 @@ function RP.ShowPortHelper()
 end
 
 local eventFrame = CreateFrame("Frame")
-eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
-eventFrame:RegisterEvent("CHAT_MSG_PARTY")
-eventFrame:RegisterEvent("CHAT_MSG_RAID")
-eventFrame:RegisterEvent("CHAT_MSG_CHANNEL")
-eventFrame:RegisterEvent("CHAT_MSG_SAY")
-eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
-eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
-eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-eventFrame:SetScript("OnEvent", function(self, event, message, sender)
+
+local CHAT_EVENTS = {
+    "CHAT_MSG_WHISPER",
+    "CHAT_MSG_PARTY",
+    "CHAT_MSG_RAID",
+    "CHAT_MSG_CHANNEL",
+    "CHAT_MSG_SAY",
+}
+
+local function PortHelperOnUpdate(self, elapsed)
+    self.elapsed = (self.elapsed or 0) + (elapsed or 0)
+    if self.elapsed < UPDATE_INTERVAL then return end
+    self.elapsed = 0
+    RefreshRows()
+end
+
+RefreshPortMonitoringState = function()
+    local tracking = EnsureDB().tracking and true or false
+    local visible = tracking and PH.frame and PH.frame:IsShown() and true or false
+    local i
+    for i = 1, table.getn(CHAT_EVENTS) do
+        if tracking then
+            eventFrame:RegisterEvent(CHAT_EVENTS[i])
+        else
+            eventFrame:UnregisterEvent(CHAT_EVENTS[i])
+        end
+    end
+    if visible then
+        eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
+        eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+        eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+        eventFrame.elapsed = 0
+        WowNoteProfiler_SetScript(eventFrame, "OnUpdate", "PortHelper.DistanceScan", PortHelperOnUpdate)
+    else
+        eventFrame:UnregisterEvent("RAID_ROSTER_UPDATE")
+        eventFrame:UnregisterEvent("PARTY_MEMBERS_CHANGED")
+        eventFrame:UnregisterEvent("PLAYER_REGEN_ENABLED")
+        WowNoteProfiler_SetScript(eventFrame, "OnUpdate", "PortHelper.DistanceScan", nil)
+    end
+end
+
+WowNoteProfiler_SetScript(eventFrame, "OnEvent", "PortHelper.Events", function(self, event, message, sender)
     if string.sub(event, 1, 9) == "CHAT_MSG_" then
         if EnsureDB().tracking and IsMatchingRequest(message) then
             AddRequest(sender, message)
         end
-    elseif event == "PLAYER_REGEN_ENABLED" then
-        RefreshRows()
-    elseif EnsureDB().tracking then
+    elseif PH.frame and PH.frame:IsShown() and EnsureDB().tracking then
         RefreshRows()
     end
 end)
 
-eventFrame:SetScript("OnUpdate", function(self, elapsed)
-    self.elapsed = (self.elapsed or 0) + elapsed
-    if self.elapsed < UPDATE_INTERVAL then return end
-    self.elapsed = 0
-    if PH.frame and PH.frame:IsShown() and EnsureDB().tracking then RefreshRows() end
-end)
+RefreshPortMonitoringState()
 
 SLASH_WOWNOTEPORT1 = "/wnport"
 SlashCmdList["WOWNOTEPORT"] = function(msg)

@@ -89,11 +89,11 @@ function WowNote_CreateMinimapButton()
     end)
     b:SetScript("OnDragStart", function(self)
         minimapDragging = true
-        self:SetScript("OnUpdate", UpdateMinimapButtonPositionFromCursor)
+        WowNoteProfiler_SetScript(self, "OnUpdate", "Minimap.Drag", UpdateMinimapButtonPositionFromCursor)
     end)
     b:SetScript("OnDragStop", function(self)
         minimapDragging = false
-        self:SetScript("OnUpdate", nil)
+        WowNoteProfiler_SetScript(self, "OnUpdate", "Minimap.Drag", nil)
     end)
 
     SetMinimapButtonPosition(GetMinimapButtonAngle())

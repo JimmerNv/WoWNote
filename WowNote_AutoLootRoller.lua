@@ -159,7 +159,7 @@ local function MakeTextArea(parent, width, height, x, y)
             ScrollingEdit_OnCursorChanged(self, cx, cy, cw, ch)
         end
     end)
-    edit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(edit, "OnUpdate", "AutoLootRoller.EditBox", function(self, elapsed)
         if ScrollingEdit_OnUpdate then
             ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
         end
@@ -555,14 +555,14 @@ local function RegisterEvents()
     eventFrame = CreateFrame("Frame")
     eventFrame:RegisterEvent("START_LOOT_ROLL")
     eventFrame:RegisterEvent("CANCEL_LOOT_ROLL")
-    eventFrame:SetScript("OnEvent", function(self, event, rollID)
+    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoLootRoller.Events", function(self, event, rollID)
         if event == "START_LOOT_ROLL" and rollID then
             QueueRoll(rollID)
         elseif event == "CANCEL_LOOT_ROLL" and rollID then
             RemoveQueuedRoll(rollID)
         end
     end)
-    eventFrame:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(eventFrame, "OnUpdate", "AutoLootRoller.PendingRolls", function(self, elapsed)
         ProcessPendingRolls(elapsed or 0)
     end)
     eventFrame:Hide()

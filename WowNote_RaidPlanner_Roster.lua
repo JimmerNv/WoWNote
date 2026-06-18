@@ -196,7 +196,7 @@ function RP.EnsureRosterEventFrame()
     f:RegisterEvent("RAID_ROSTER_UPDATE")
     f:RegisterEvent("PARTY_MEMBERS_CHANGED")
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
-    f:SetScript("OnEvent", function()
+    WowNoteProfiler_SetScript(f, "OnEvent", "RaidPlanner.RosterEvents", function()
         if RP.frame and RP.frame:IsShown() then
             RP.RemoveLeaversFromRoster()
         end

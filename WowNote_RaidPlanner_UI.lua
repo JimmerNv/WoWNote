@@ -496,7 +496,7 @@ function WowNote_CreateRaidPlannerUI()
     custom:SetScript("OnClick", function() RP.sizeEdit:SetFocus(); RP.sizeEdit:HighlightText() end)
 
     RP.raidNameEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Raid Name", 300, -52, 220, "", false, 24, "The raid or activity name. Used by the %name placeholder.")
-    RP.channelEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Post Channel", 545, -52, 80, "/2", false, 24, "Where to post the message. Examples: /2, /5, /y, /s, /g, /p, /raid.")
+    RP.channelEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Post Channels", 545, -52, 95, "/2", false, 24, "One or more post channels. Separate multiple targets with spaces, commas, semicolons, plus signs, or vertical bars. Example: /2, /5, /y.")
     RP.contactEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Contact", 648, -52, 150, "/w me", false, 24, "Free contact text inserted by the %contact placeholder. Example: /w Stiffbeard.")
     RP.autoRemoveCheck = MakeCheckButton(f, "Auto-remove leavers", 815, -68, true, "When group or raid roster changes, assigned players who are no longer in your group are removed from the roster table automatically.")
 

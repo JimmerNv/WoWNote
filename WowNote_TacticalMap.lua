@@ -294,6 +294,13 @@ local function AddLinePoints(x1, y1, x2, y2, stroke)
     end
 end
 
+local function DrawingOnUpdate(self)
+    if not isDrawing or not currentStroke or not drawMode then return end
+    local x, y = GetCursorBoardPosition()
+    local dx, dy = x - (lastX or x), y - (lastY or y)
+    if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
+end
+
 local function StartStroke()
     local x, y = GetCursorBoardPosition()
     currentStroke = { color = currentColorIndex, size = thickness, points = {}, textures = {} }
@@ -301,10 +308,12 @@ local function StartStroke()
     lastX, lastY = x, y
     AddDot(x, y, currentStroke)
     isDrawing = true
+    if board then WowNoteProfiler_SetScript(board, "OnUpdate", "TacticalMap.Drawing", DrawingOnUpdate) end
 end
 
 local function StopStroke()
     isDrawing = false
+    if board then WowNoteProfiler_SetScript(board, "OnUpdate", "TacticalMap.Drawing", nil) end
     currentStroke = nil
     lastX, lastY = nil, nil
 end
@@ -638,7 +647,9 @@ local function ShareDrawing()
         local id = tostring(time and time() or GetTime())
         for i = 1, total do
             local chunk = string.sub(text, ((i - 1) * max) + 1, i * max)
-            SendAddonMessage("WowNote", "TAC:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk, "RAID")
+            local packet = "TAC:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk
+            SendAddonMessage("WowNote", packet, "RAID")
+            if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WowNote RAID TAC", string.len(packet), true) end
         end
         Print("Shared tactical drawing to raid (" .. total .. " packets).")
     else
@@ -650,6 +661,7 @@ local incoming = {}
 local function OnAddonMessage(prefix, msg, channel, sender)
     if prefix ~= "WowNote" or type(msg) ~= "string" then return end
     local id, idx, total, chunk = string.match(msg, "^TAC:([^:]+):(%d+):(%d+):(.+)$")
+    if id and WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", "WowNote " .. tostring(channel or "?") .. " TAC", string.len(msg), true) end
     if not id then return end
     idx, total = tonumber(idx), tonumber(total)
     if not idx or not total then return end
@@ -670,7 +682,7 @@ local function EnsureReceiver()
     if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix("WowNote") end
     receiveFrame = CreateFrame("Frame")
     receiveFrame:RegisterEvent("CHAT_MSG_ADDON")
-    receiveFrame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
+    WowNoteProfiler_SetScript(receiveFrame, "OnEvent", "TacticalMap.CommEvents", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
 end
 
 local function CreateUI()
@@ -826,12 +838,6 @@ local function CreateUI()
     board.border:SetBackdropBorderColor(0.7, 0.7, 0.7, 1)
     board:SetScript("OnMouseDown", function(_, button) if button == "LeftButton" and drawMode then StartStroke() end end)
     board:SetScript("OnMouseUp", function() StopStroke() end)
-    board:SetScript("OnUpdate", function()
-        if not isDrawing or not currentStroke or not drawMode then return end
-        local x, y = GetCursorBoardPosition()
-        local dx, dy = x - (lastX or x), y - (lastY or y)
-        if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
-    end)
     board:SetScript("OnSizeChanged", function()
         LayoutBoardTiles()
     end)

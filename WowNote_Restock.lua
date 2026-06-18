@@ -235,13 +235,8 @@ function WowNote_OpenRestock()
 end
 
 local events = CreateFrame("Frame")
-events:RegisterEvent("MERCHANT_SHOW")
-events:RegisterEvent("MERCHANT_UPDATE")
-events:RegisterEvent("BAG_UPDATE")
-events:RegisterEvent("BAG_UPDATE_DELAYED")
-events:RegisterEvent("MERCHANT_CLOSED")
-events:SetScript("OnUpdate", function(self)
-    if not merchantOpen then return end
+
+local function RestockOnUpdate(self)
     local now = GetTime and GetTime() or time()
     local changed = false
     for itemId, startedAt in pairs(purchasePendingAt) do
@@ -256,10 +251,28 @@ events:SetScript("OnUpdate", function(self)
     if changed then
         WowNote_Restock_CheckMerchant()
     end
-end)
-events:SetScript("OnEvent", function(self, event)
+end
+
+local function SetMerchantMonitoring(enabled)
+    if enabled then
+        events:RegisterEvent("MERCHANT_UPDATE")
+        events:RegisterEvent("BAG_UPDATE")
+        events:RegisterEvent("BAG_UPDATE_DELAYED")
+        WowNoteProfiler_SetScript(events, "OnUpdate", "Restock.MerchantWorker", RestockOnUpdate)
+    else
+        events:UnregisterEvent("MERCHANT_UPDATE")
+        events:UnregisterEvent("BAG_UPDATE")
+        events:UnregisterEvent("BAG_UPDATE_DELAYED")
+        WowNoteProfiler_SetScript(events, "OnUpdate", "Restock.MerchantWorker", nil)
+    end
+end
+
+events:RegisterEvent("MERCHANT_SHOW")
+events:RegisterEvent("MERCHANT_CLOSED")
+WowNoteProfiler_SetScript(events, "OnEvent", "Restock.Events", function(self, event)
     if event == "MERCHANT_CLOSED" then
         merchantOpen = false
+        SetMerchantMonitoring(false)
         ClearPendingBuys()
         boughtThisMerchant = {}
         pendingBuys = {}
@@ -273,11 +286,14 @@ events:SetScript("OnEvent", function(self, event)
     if event == "BAG_UPDATE_DELAYED" then
         if not merchantOpen then return end
         ClearPendingBuys()
-        SetStatus("Bags recounted.")
-        WowNote_Restock_CheckMerchant()
+        if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(true, false) end
+        SetStatus("Bags changed. Recount requested.")
         return
     end
-    if event == "MERCHANT_SHOW" then boughtThisMerchant = {} end
-    merchantOpen = true
+    if event == "MERCHANT_SHOW" then
+        boughtThisMerchant = {}
+        merchantOpen = true
+        SetMerchantMonitoring(true)
+    end
     WowNote_Restock_CheckMerchant()
 end)

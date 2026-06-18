@@ -57,6 +57,8 @@ local ModelsUnused = {};
 me.ModelsUnused = ModelsUnused;
 local ModelsUsed = {};
 me.ModelsUsed = ModelsUsed;
+local UpdateMouselookPolling;
+local CursorModuleEnabled;
 
 me.ScaleDefault = 0.01; -- Baseline scaling factor applied before presets and custom scales
 
@@ -363,6 +365,18 @@ do
 				Model:SetFrameLevel( Level );
 			end
 		end
+
+		-- Do not keep a fullscreen OnUpdate handler alive when all cursor layers
+		-- are disabled. The frame is shown again automatically when a model is
+		-- enabled and no other block is active.
+		if ( next( ModelsUsed ) == nil ) then
+			me.BlockAdd( "NoModels" );
+		else
+			me.BlockRemove( "NoModels" );
+		end
+		if ( UpdateMouselookPolling ) then
+			UpdateMouselookPolling();
+		end
 	end
 end
 
@@ -558,6 +572,14 @@ function me:OnShow ()
 			Model:SetModel( Path );
 		end
 	end
+	WowNoteProfiler_SetScript( me, "OnUpdate", "Cursor.Effect", me.OnUpdate );
+end
+
+-- Remove the cursor positioning handler completely while the effect frame is
+-- hidden. Hidden models, disabled modules and empty cursor sets therefore have
+-- no per-frame cursor positioning cost.
+function me:OnHide ()
+	WowNoteProfiler_SetScript( me, "OnUpdate", "Cursor.Effect", nil );
 end
 --[[****************************************************************************
   * Function: WowNoteCursor:OnUpdate
@@ -586,20 +608,25 @@ end
 -----------------------
 
 function WowNote_SetCursorEffectsModuleEnabled ( Enabled )
+	CursorModuleEnabled = Enabled and true or false;
 	EnsureCursorDB();
 	SetLegacyCursorBlocked( Enabled and true or false );
 	if ( Enabled ) then
-		me.BlockRemove( "ModuleDisabled" );
 		me.Update();
+		me.BlockRemove( "ModuleDisabled" );
 	else
 		me.BlockAdd( "ModuleDisabled" );
 		if ( me.Options ) then
 			me.Options:Hide();
 		end
 	end
+	if ( UpdateMouselookPolling ) then UpdateMouselookPolling(); end
 end
 
 function WowNote_IsCursorEffectsModuleEnabled ()
+	if ( CursorModuleEnabled ~= nil ) then
+		return CursorModuleEnabled;
+	end
 	if ( WowNote_IsModuleEnabled ) then
 		return WowNote_IsModuleEnabled( "cursorEffects" );
 	end
@@ -612,9 +639,12 @@ end
 -----------------------------
 
 do
-	me:SetScript( "OnUpdate", me.OnUpdate );
-	me:SetScript( "OnEvent", me.OnEvent );
+	-- Start blocked so no cursor OnUpdate runs before saved settings and the
+	-- module state have been loaded during ADDON_LOADED.
+	me.BlockAdd( "ModuleDisabled" );
+	WowNoteProfiler_SetScript(me, "OnEvent", "Cursor.Events", me.OnEvent);
 	me:SetScript( "OnShow", me.OnShow );
+	me:SetScript( "OnHide", me.OnHide );
 	me:RegisterEvent( "ADDON_LOADED" );
 	me:RegisterEvent( "SCREENSHOT_SUCCEEDED" );
 	me:RegisterEvent( "SCREENSHOT_FAILED" );
@@ -629,5 +659,27 @@ do
 	-- Hook camera movement to hide cursor effects
 	hooksecurefunc( "CameraOrSelectOrMoveStart", me.CameraMoveStart );
 	hooksecurefunc( "CameraOrSelectOrMoveStop", me.CameraMoveStop );
-	CreateFrame( "Frame" ):SetScript( "OnUpdate", me.MouselookOnUpdate );
+	-- Mouselook state is maintained by secure hooks instead of a permanent
+	-- polling timer. This removes the previous per-frame handler completely and
+	-- avoids AnimationGroup timer crashes on some 3.3.5a/HD clients.
+	if ( type( MouselookStart ) == "function" ) then
+		hooksecurefunc( "MouselookStart", function ()
+			if ( WowNote_IsCursorEffectsModuleEnabled() and next( ModelsUsed ) ~= nil ) then
+				me.BlockAdd( "Mouselook" );
+			end
+		end );
+	end
+	if ( type( MouselookStop ) == "function" ) then
+		hooksecurefunc( "MouselookStop", function ()
+			me.BlockRemove( "Mouselook" );
+		end );
+	end
+
+	UpdateMouselookPolling = function ()
+		if ( WowNote_IsCursorEffectsModuleEnabled() and next( ModelsUsed ) ~= nil ) then
+			me:MouselookOnUpdate();
+		else
+			me.BlockRemove( "Mouselook" );
+		end
+	end
 end

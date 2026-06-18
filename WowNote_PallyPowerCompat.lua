@@ -7,6 +7,11 @@ local WN = WowNote_Internal or {}
 local PP_PREFIX = "PLPWR"
 local MAX_CLASSES = 11
 local MAX_AURAS = 7
+local AURA_REFRESH_DELAY = 0.08
+local SPELLCAST_REFRESH_DELAY = 0.10
+local ROSTER_REFRESH_DELAY = 0.25
+local COMM_REFRESH_DELAY = 0.10
+local SAVE_REFRESH_DELAY = 0.20
 
 local CLASS_NAMES = {
     [1] = "Warrior",
@@ -125,6 +130,9 @@ local Refresh
 local RefreshBuffFrame
 local UpdateCastButtonVisual
 local UpdateSecureCastButton
+local QueueVisualRefresh
+local UpdateRuntimeEventRegistration
+local loadedTalentGroup
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then
@@ -263,77 +271,144 @@ local function IncomingCanControl(sender, targetName)
     return false
 end
 
+local function GetActiveTalentGroupKey()
+    local group = 1
+    if GetActiveTalentGroup then
+        local ok, value = pcall(GetActiveTalentGroup)
+        if ok and tonumber(value) then group = tonumber(value) end
+    end
+    if group ~= 2 then group = 1 end
+    return tostring(group)
+end
+
+local function EnsureSpecProfile(cfg, specKey)
+    cfg.specProfiles = type(cfg.specProfiles) == "table" and cfg.specProfiles or {}
+    specKey = tostring(specKey or GetActiveTalentGroupKey())
+    if type(cfg.specProfiles[specKey]) ~= "table" then cfg.specProfiles[specKey] = {} end
+    local profile = cfg.specProfiles[specKey]
+    if type(profile.savedAssignments) ~= "table" then profile.savedAssignments = {} end
+    if type(profile.savedAuras) ~= "table" then profile.savedAuras = {} end
+    return profile
+end
+
 EnsureConfig = function()
     if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
     if type(WowNoteDB.pallyCompat) ~= "table" then WowNoteDB.pallyCompat = {} end
-    if WowNoteDB.pallyCompat.testMode == nil then
-        WowNoteDB.pallyCompat.testMode = false
+    local cfg = WowNoteDB.pallyCompat
+    if cfg.testMode == nil then cfg.testMode = false end
+    if cfg.freeAssign == nil then cfg.freeAssign = true end
+    if cfg.buffFrameVisible == nil then cfg.buffFrameVisible = true end
+    if type(cfg.savedAssignments) ~= "table" then cfg.savedAssignments = {} end
+    if type(cfg.savedAuras) ~= "table" then cfg.savedAuras = {} end
+    if type(cfg.specProfiles) ~= "table" then cfg.specProfiles = {} end
+
+    local activeKey = GetActiveTalentGroupKey()
+    local profile = EnsureSpecProfile(cfg, activeKey)
+    if cfg.specProfileVersion ~= 1 then
+        -- Preserve the previous single-profile configuration as the initial
+        -- configuration for the talent group that is active during migration.
+        if next(profile.savedAssignments) == nil then
+            for name, assignment in pairs(cfg.savedAssignments) do
+                if type(assignment) == "table" then
+                    profile.savedAssignments[name] = {}
+                    for classId = 1, MAX_CLASSES do
+                        profile.savedAssignments[name][classId] = tonumber(assignment[classId]) or 0
+                    end
+                end
+            end
+        end
+        if next(profile.savedAuras) == nil then
+            for name, aura in pairs(cfg.savedAuras) do
+                profile.savedAuras[name] = tonumber(aura) or 0
+            end
+        end
+        cfg.specProfileVersion = 1
     end
-    if WowNoteDB.pallyCompat.freeAssign == nil then
-        WowNoteDB.pallyCompat.freeAssign = true
-    end
-    if WowNoteDB.pallyCompat.buffFrameVisible == nil then
-        WowNoteDB.pallyCompat.buffFrameVisible = true
-    end
-    if type(WowNoteDB.pallyCompat.savedAssignments) ~= "table" then
-        WowNoteDB.pallyCompat.savedAssignments = {}
-    end
-    if type(WowNoteDB.pallyCompat.savedAuras) ~= "table" then
-        WowNoteDB.pallyCompat.savedAuras = {}
-    end
-    return WowNoteDB.pallyCompat
+    return cfg
 end
 
 local SendPP
 local EnsurePally
 
-local function SavePallyAssignments()
-    local cfg = EnsureConfig()
-    cfg.savedAssignments = {}
-    cfg.savedAuras = {}
-
-    if type(PallyPower_Assignments) == "table" then
-        for name, assignment in pairs(PallyPower_Assignments) do
-            if type(assignment) == "table" then
-                cfg.savedAssignments[name] = {}
-                for classId = 1, MAX_CLASSES do
-                    cfg.savedAssignments[name][classId] = tonumber(assignment[classId]) or 0
-                end
+local function CopyAssignments(source)
+    local result = {}
+    if type(source) ~= "table" then return result end
+    for name, assignment in pairs(source) do
+        if type(assignment) == "table" then
+            result[name] = {}
+            for classId = 1, MAX_CLASSES do
+                result[name][classId] = tonumber(assignment[classId]) or 0
             end
         end
     end
-
-    if type(PallyPower_AuraAssignments) == "table" then
-        for name, aura in pairs(PallyPower_AuraAssignments) do
-            cfg.savedAuras[name] = tonumber(aura) or 0
-        end
-    end
+    return result
 end
 
-local function LoadSavedPallyAssignments()
-    local cfg = EnsureConfig()
+local function CopyAuras(source)
+    local result = {}
+    if type(source) ~= "table" then return result end
+    for name, aura in pairs(source) do result[name] = tonumber(aura) or 0 end
+    return result
+end
 
-    if type(cfg.savedAssignments) == "table" then
-        for name, assignment in pairs(cfg.savedAssignments) do
-            if type(assignment) == "table" then
-                EnsurePally(name)
-                for classId = 1, MAX_CLASSES do
-                    local value = tonumber(assignment[classId]) or 0
-                    state.assignments[name][classId] = value
-                    PallyPower_Assignments[name][classId] = value
-                end
+local function SavePallyAssignments(specKey)
+    local cfg = EnsureConfig()
+    specKey = tostring(specKey or loadedTalentGroup or GetActiveTalentGroupKey())
+    local profile = EnsureSpecProfile(cfg, specKey)
+    profile.savedAssignments = CopyAssignments(PallyPower_Assignments)
+    profile.savedAuras = CopyAuras(PallyPower_AuraAssignments)
+
+    -- Keep the legacy fields synchronized for downgrade compatibility and for
+    -- older code paths that still inspect the single-profile values.
+    cfg.savedAssignments = CopyAssignments(profile.savedAssignments)
+    cfg.savedAuras = CopyAuras(profile.savedAuras)
+end
+
+local function ClearLoadedAssignments()
+    for name, assignment in pairs(PallyPower_Assignments) do
+        if type(assignment) == "table" then
+            for classId = 1, MAX_CLASSES do assignment[classId] = 0 end
+        end
+    end
+    for name, assignment in pairs(state.assignments) do
+        if type(assignment) == "table" then
+            for classId = 1, MAX_CLASSES do assignment[classId] = 0 end
+        end
+    end
+    for name in pairs(PallyPower_AuraAssignments) do PallyPower_AuraAssignments[name] = 0 end
+    for name in pairs(state.auras) do state.auras[name] = 0 end
+end
+
+local function LoadSavedPallyAssignments(specKey, replaceCurrent)
+    local cfg = EnsureConfig()
+    specKey = tostring(specKey or GetActiveTalentGroupKey())
+    local profile = EnsureSpecProfile(cfg, specKey)
+    local savedAssignments = profile.savedAssignments
+    local savedAuras = profile.savedAuras
+
+    -- Legacy values are migrated once by EnsureConfig into the then-active
+    -- talent group. An empty profile for the other talent group must remain
+    -- empty instead of inheriting the active spec's assignments.
+    if replaceCurrent then ClearLoadedAssignments() end
+
+    for name, assignment in pairs(savedAssignments) do
+        if type(assignment) == "table" then
+            EnsurePally(name)
+            for classId = 1, MAX_CLASSES do
+                local value = tonumber(assignment[classId]) or 0
+                state.assignments[name][classId] = value
+                PallyPower_Assignments[name][classId] = value
             end
         end
     end
 
-    if type(cfg.savedAuras) == "table" then
-        for name, aura in pairs(cfg.savedAuras) do
-            EnsurePally(name)
-            local value = tonumber(aura) or 0
-            state.auras[name] = value
-            PallyPower_AuraAssignments[name] = value
-        end
+    for name, aura in pairs(savedAuras) do
+        EnsurePally(name)
+        local value = tonumber(aura) or 0
+        state.auras[name] = value
+        PallyPower_AuraAssignments[name] = value
     end
+    loadedTalentGroup = specKey
 end
 
 local function IsTestModeEnabled()
@@ -391,11 +466,13 @@ end
 SendPP = function(message)
     message = tostring(message or "")
     if message == "" then return end
+    local distribution = GetDistribution()
     if PallyPower and PallyPower.SendMessage then
         PallyPower:SendMessage(message)
     else
-        SendAddonMessage(PP_PREFIX, message, GetDistribution())
+        SendAddonMessage(PP_PREFIX, message, distribution)
     end
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", PP_PREFIX .. " " .. tostring(distribution or "?"), string.len(message), true) end
 end
 
 local function GetAssignmentPayload(name)
@@ -627,36 +704,39 @@ end
 
 local function GetGroupUnitsForBuffScan()
     local units = {}
-    AddBuffScanUnit(units, "player")
-    AddBuffScanUnit(units, "pet", 11)
     if GetNumRaidMembers and GetNumRaidMembers() > 0 then
         local i
         for i = 1, GetNumRaidMembers() do
             AddBuffScanUnit(units, "raid" .. i)
             AddBuffScanUnit(units, "raidpet" .. i, 11)
         end
-    elseif GetNumPartyMembers then
-        local i
-        for i = 1, GetNumPartyMembers() do
-            AddBuffScanUnit(units, "party" .. i)
-            AddBuffScanUnit(units, "partypet" .. i, 11)
+    else
+        AddBuffScanUnit(units, "player")
+        AddBuffScanUnit(units, "pet", 11)
+        if GetNumPartyMembers then
+            local i
+            for i = 1, GetNumPartyMembers() do
+                AddBuffScanUnit(units, "party" .. i)
+                AddBuffScanUnit(units, "partypet" .. i, 11)
+            end
         end
     end
     return units
 end
 
-local function FindUnitBuffRemaining(unit, blessingId)
+local function FindUnitBuffRemaining(unit, blessingId, spellName, shortName, now)
     if not UnitBuff then return nil end
-    local spellName = GetBlessingSpellName(blessingId)
+    spellName = spellName or GetBlessingSpellName(blessingId)
     if not spellName or spellName == "" then return nil end
-    local shortName = BLESSING_NAMES[blessingId] or ""
+    shortName = shortName or BLESSING_NAMES[blessingId] or ""
+    now = now or (GetTime and GetTime() or 0)
     local i = 1
     while true do
-        local name, _, _, _, _, duration, expirationTime = UnitBuff(unit, i)
+        local name, _, _, _, _, _, expirationTime = UnitBuff(unit, i)
         if not name then break end
         if name == spellName or (shortName ~= "" and string.find(name, shortName, 1, true)) then
-            if expirationTime and expirationTime > 0 and GetTime then
-                return expirationTime - GetTime()
+            if expirationTime and expirationTime > 0 then
+                return expirationTime - now
             end
             return 999999
         end
@@ -689,63 +769,6 @@ local function FormatRemaining(seconds)
     return string.format("%d:%02d", minutes, secs)
 end
 
-local function BuildBuffTasks()
-    local tasks = {}
-    local player = UnitName("player")
-    if not player or not state.assignments[player] then return tasks end
-    local units = GetGroupUnitsForBuffScan()
-    local byClass = {}
-    local _, item
-    for _, item in ipairs(units) do
-        byClass[item.classId] = byClass[item.classId] or {}
-        table.insert(byClass[item.classId], item)
-    end
-    local classId
-    for classId = 1, MAX_CLASSES do
-        local blessingId = tonumber(state.assignments[player][classId]) or 0
-        if blessingId > 0 and blessingId <= 4 and byClass[classId] then
-            local classUnits = byClass[classId]
-            local minRemaining = nil
-            local targetUnit, targetName
-            local _, unitInfo
-            for _, unitInfo in ipairs(classUnits) do
-                local remaining = FindUnitBuffRemaining(unitInfo.unit, blessingId)
-                if not remaining then
-                    targetUnit = unitInfo.unit
-                    targetName = unitInfo.name
-                    minRemaining = nil
-                    break
-                elseif not minRemaining or remaining < minRemaining then
-                    minRemaining = remaining
-                    targetUnit = unitInfo.unit
-                    targetName = unitInfo.name
-                end
-            end
-            if targetUnit then
-                local missing = minRemaining == nil
-                if missing or minRemaining <= 300 then
-                    table.insert(tasks, {
-                        unit = targetUnit,
-                        targetName = targetName,
-                        classId = classId,
-                        className = CLASS_NAMES[classId] or "Class",
-                        blessingId = blessingId,
-                        blessingName = BLESSING_NAMES[blessingId] or "Blessing",
-                        spellName = GetBlessingSpellName(blessingId),
-                        remaining = minRemaining,
-                        missing = missing,
-                    })
-                end
-            end
-        end
-    end
-    table.sort(tasks, function(a, b)
-        if a.missing ~= b.missing then return a.missing end
-        return (a.remaining or 0) < (b.remaining or 0)
-    end)
-    return tasks
-end
-
 local function IsBuffTaskInRange(task)
     if not task or not task.spellName or not task.unit then return false end
     if not UnitExists or not UnitExists(task.unit) then return false end
@@ -771,8 +794,110 @@ local function GetAutoBuffPenalty(task)
     return penalty
 end
 
-local function SelectAutoBuffTask()
-    local tasks = BuildBuffTasks()
+-- Builds one shared roster/aura snapshot per refresh. The previous implementation
+-- rebuilt the complete raid list and rescanned auras repeatedly for every class and
+-- every button. In a 25-player raid that produced a large burst of UnitBuff calls.
+local function BuildBuffSnapshot()
+    local snapshot = {
+        units = GetGroupUnitsForBuffScan(),
+        byClass = {},
+        statuses = {},
+        tasks = {},
+        buffChecks = 0,
+    }
+    if WowNoteProfiler_AddCounter then WowNoteProfiler_AddCounter("PallyBuffs.snapshotScans", 1) end
+
+    local _, unitInfo
+    for _, unitInfo in ipairs(snapshot.units) do
+        snapshot.byClass[unitInfo.classId] = snapshot.byClass[unitInfo.classId] or {}
+        table.insert(snapshot.byClass[unitInfo.classId], unitInfo)
+    end
+
+    local player = UnitName("player")
+    local assignments = player and state.assignments[player]
+    local now = GetTime and GetTime() or 0
+
+    local classId
+    for classId = 1, MAX_CLASSES do
+        local blessingId = assignments and (tonumber(assignments[classId]) or 0) or 0
+        if blessingId > 0 and blessingId <= 4 then
+            local classUnits = snapshot.byClass[classId] or {}
+            local spellName = GetBlessingSpellName(blessingId)
+            local shortName = BLESSING_NAMES[blessingId] or ""
+            local firstMissingUnit, firstMissingName
+            local lowestUnit, lowestName, lowestRemaining
+            local totalCount, buffedCount, missingCount = 0, 0, 0
+            local missingNames = {}
+
+            for _, unitInfo in ipairs(classUnits) do
+                totalCount = totalCount + 1
+                snapshot.buffChecks = snapshot.buffChecks + 1
+                local remaining = FindUnitBuffRemaining(unitInfo.unit, blessingId, spellName, shortName, now)
+                if not remaining then
+                    missingCount = missingCount + 1
+                    table.insert(missingNames, unitInfo.name or unitInfo.unit or "?")
+                    if not firstMissingUnit then
+                        firstMissingUnit = unitInfo.unit
+                        firstMissingName = unitInfo.name
+                    end
+                else
+                    buffedCount = buffedCount + 1
+                    if not lowestRemaining or remaining < lowestRemaining then
+                        lowestRemaining = remaining
+                        lowestUnit = unitInfo.unit
+                        lowestName = unitInfo.name
+                    end
+                end
+            end
+
+            local missing = missingCount > 0
+            local targetUnit = firstMissingUnit or lowestUnit
+            local targetName = firstMissingName or lowestName
+            local remaining = missing and nil or lowestRemaining
+            local status = {
+                unit = targetUnit,
+                targetName = targetName,
+                classId = classId,
+                className = CLASS_NAMES[classId] or "Class",
+                blessingId = blessingId,
+                blessingName = BLESSING_NAMES[blessingId] or "Blessing",
+                spellName = spellName,
+                remaining = remaining,
+                missing = missing,
+                hasUnit = totalCount > 0,
+                totalCount = totalCount,
+                buffedCount = buffedCount,
+                missingCount = missingCount,
+                missingNames = missingNames,
+                partial = missingCount > 0 and buffedCount > 0,
+            }
+            snapshot.statuses[classId] = status
+            if targetUnit and (missing or (remaining and remaining <= 300)) then
+                table.insert(snapshot.tasks, status)
+            end
+        end
+    end
+
+    table.sort(snapshot.tasks, function(a, b)
+        if a.missing ~= b.missing then return a.missing end
+        return (a.remaining or 0) < (b.remaining or 0)
+    end)
+    if WowNoteProfiler_SetGauge then
+        WowNoteProfiler_SetGauge("PallyBuffs.unitsInLastSnapshot", table.getn(snapshot.units))
+        WowNoteProfiler_SetGauge("PallyBuffs.buffChecksInLastSnapshot", snapshot.buffChecks)
+        WowNoteProfiler_SetGauge("PallyBuffs.tasksInLastSnapshot", table.getn(snapshot.tasks))
+    end
+    return snapshot
+end
+
+local function BuildBuffTasks(snapshot)
+    snapshot = snapshot or BuildBuffSnapshot()
+    return snapshot.tasks, snapshot
+end
+
+local function SelectAutoBuffTask(snapshot)
+    local tasks
+    tasks, snapshot = BuildBuffTasks(snapshot)
     local bestTask
     local bestScore = 999999
     local i
@@ -786,88 +911,20 @@ local function SelectAutoBuffTask()
             end
         end
     end
-    return bestTask, tasks
+    return bestTask, tasks, snapshot
 end
 
-local function GetUnitsByClassForBuffScan()
-    local byClass = {}
-    local units = GetGroupUnitsForBuffScan()
-    local _, unitInfo
-    for _, unitInfo in ipairs(units) do
-        byClass[unitInfo.classId] = byClass[unitInfo.classId] or {}
-        table.insert(byClass[unitInfo.classId], unitInfo)
-    end
-    return byClass
+local function BuildClassBuffStatus(classId, snapshot)
+    snapshot = snapshot or BuildBuffSnapshot()
+    return snapshot.statuses[tonumber(classId) or 0], snapshot
 end
 
-local function BuildClassBuffStatus(classId)
-    local player = UnitName("player")
-    if not player or not state.assignments[player] then return nil end
-    classId = tonumber(classId) or 0
-    local blessingId = tonumber(state.assignments[player][classId]) or 0
-    if blessingId <= 0 or blessingId > 4 then return nil end
-
-    local byClass = GetUnitsByClassForBuffScan()
-    local classUnits = byClass[classId] or {}
-    local targetUnit, targetName
-    local minRemaining = nil
-    local missing = false
-    local hasUnit = false
-    local totalCount = 0
-    local buffedCount = 0
-    local missingCount = 0
-    local missingNames = {}
-    local _, unitInfo
-
-    for _, unitInfo in ipairs(classUnits) do
-        hasUnit = true
-        totalCount = totalCount + 1
-        local remaining = FindUnitBuffRemaining(unitInfo.unit, blessingId)
-        if not remaining then
-            missing = true
-            missingCount = missingCount + 1
-            table.insert(missingNames, unitInfo.name or unitInfo.unit or "?")
-            -- Keep the first missing unit as cast target. This is the important
-            -- PallyPower-like behavior for partial class buffs, e.g. 2/3 druids.
-            if not targetUnit then
-                targetUnit = unitInfo.unit
-                targetName = unitInfo.name
-                minRemaining = nil
-            end
-        else
-            buffedCount = buffedCount + 1
-            if not missing and (not minRemaining or remaining < minRemaining) then
-                minRemaining = remaining
-                targetUnit = unitInfo.unit
-                targetName = unitInfo.name
-            end
-        end
-    end
-
-    return {
-        unit = targetUnit,
-        targetName = targetName,
-        classId = classId,
-        className = CLASS_NAMES[classId] or "Class",
-        blessingId = blessingId,
-        blessingName = BLESSING_NAMES[blessingId] or "Blessing",
-        spellName = GetBlessingSpellName(blessingId),
-        remaining = minRemaining,
-        missing = missing,
-        hasUnit = hasUnit,
-        totalCount = totalCount,
-        buffedCount = buffedCount,
-        missingCount = missingCount,
-        missingNames = missingNames,
-        partial = hasUnit and missingCount > 0 and buffedCount > 0,
-    }
-end
-
-local function SelectClassBuffTask(classId)
-    local status = BuildClassBuffStatus(classId)
-    if not status or not status.spellName or not status.unit then return nil end
-    if not IsBuffTaskInRange(status) then return nil end
-    return status
+local function SelectClassBuffTask(classId, snapshot)
+    local status
+    status, snapshot = BuildClassBuffStatus(classId, snapshot)
+    if not status or not status.spellName or not status.unit then return nil, snapshot end
+    if not IsBuffTaskInRange(status) then return nil, snapshot end
+    return status, snapshot
 end
 
 local function SetSecureBuffAttributes(button, task)
@@ -1147,7 +1204,6 @@ local function RegisterSlashCommands()
 end
 
 local function GetVisiblePallies()
-    SyncFromPallyPower()
     local list = GetCurrentPaladins()
     if table.getn(list) == 0 and IsTestModeEnabled() then
         EnsureSampleData()
@@ -1228,6 +1284,10 @@ local function ParseAddonMessage(sender, msg)
     if not sender or sender == UnitName("player") then return end
     msg = tostring(msg or "")
     if msg == "REQ" then
+        local now = GetTime and GetTime() or 0
+        ChatControl[sender] = ChatControl[sender] or { time = 0 }
+        if now - (tonumber(ChatControl[sender].time) or 0) < 15 then return end
+        ChatControl[sender].time = now
         AnnounceSelf()
     elseif string.find(msg, "^SELF") then
         ParseSelf(sender, msg)
@@ -1410,12 +1470,23 @@ local function CreateBuffFrame()
             SetStatus("No missing or expiring PallyBuffs found.")
         end
         ClearAutoBuffButton(self)
-        local nextTask = SelectAutoBuffTask()
-        buffFrame.nextTask = nextTask
-        UpdateSecureCastButton(nextTask)
-        UpdateCastButtonVisual(nextTask)
-        buffFrame.elapsed = 1.0
+        -- UNIT_AURA normally drives the refresh. This short fallback also covers
+        -- private-server clients that deliver the aura event late or not at all.
+        if QueueVisualRefresh then QueueVisualRefresh(SPELLCAST_REFRESH_DELAY) end
     end)
+    buffFrame.castButton:SetScript("OnEnter", function(self)
+        local task = self.wowNoteTooltipTask
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("PallyBuffs cast button", 1, 1, 1)
+        if task then
+            GameTooltip:AddDoubleLine("|cffffd100Left-click|r", "Cast " .. tostring(task.blessingName or "Buff") .. " for " .. tostring(task.className or "Class") .. ".", 1, 1, 1, 0.85, 0.85, 0.85)
+        else
+            GameTooltip:AddDoubleLine("|cffffd100Left-click|r", "No missing buff to cast.", 1, 1, 1, 0.85, 0.85, 0.85)
+        end
+        GameTooltip:AddLine("The overlay refreshes from aura, cast and group events while visible.", 0.85, 0.85, 0.85, true)
+        GameTooltip:Show()
+    end)
+    buffFrame.castButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     buffFrame.summary = buffFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     buffFrame.summary:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 64, -34)
@@ -1472,7 +1543,7 @@ local function CreateBuffFrame()
         end)
         row:SetScript("PostClick", function(self)
             ClearAutoBuffButton(self)
-            buffFrame.elapsed = 1.0
+            if QueueVisualRefresh then QueueVisualRefresh(SPELLCAST_REFRESH_DELAY) end
         end)
         AddActionTooltip(row, CLASS_NAMES[classId] or "Class", {
             { key = "Left-click", text = "Cast this class assignment if a valid target is available." },
@@ -1481,12 +1552,14 @@ local function CreateBuffFrame()
         buffFrameRows[classId] = row
     end
 
-    buffFrame:SetScript("OnUpdate", function(self, elapsed)
-        self.elapsed = (self.elapsed or 0) + (elapsed or 0)
-        if self.elapsed >= 1.0 then
-            self.elapsed = 0
-            RefreshBuffFrame()
+    buffFrame:SetScript("OnShow", function(self)
+        if UpdateRuntimeEventRegistration then UpdateRuntimeEventRegistration(true) end
+        if not self.wowNoteRefreshInProgress and QueueVisualRefresh then
+            QueueVisualRefresh(0)
         end
+    end)
+    buffFrame:SetScript("OnHide", function(self)
+        if UpdateRuntimeEventRegistration then UpdateRuntimeEventRegistration(true) end
     end)
 end
 
@@ -1517,6 +1590,10 @@ UpdateCastButtonVisual = function(task)
 end
 
 RefreshBuffFrame = function()
+    if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("pallyBuffs") then
+        if buffFrame then buffFrame:Hide() end
+        return
+    end
     EnsureConfig()
     CreateBuffFrame()
     UpdateBuffFrameButton()
@@ -1533,9 +1610,13 @@ RefreshBuffFrame = function()
 
     local player = UnitName("player")
     EnsurePally(player)
+    buffFrame.wowNoteRefreshInProgress = true
     buffFrame:Show()
+    buffFrame.wowNoteRefreshInProgress = nil
+    if UpdateRuntimeEventRegistration then UpdateRuntimeEventRegistration(true) end
 
-    local task, tasks = SelectAutoBuffTask()
+    local snapshot = BuildBuffSnapshot()
+    local task, tasks = SelectAutoBuffTask(snapshot)
     tasks = tasks or {}
     buffFrame.nextTask = task
     UpdateSecureCastButton(task)
@@ -1545,10 +1626,10 @@ RefreshBuffFrame = function()
     local classId
     for classId = 1, MAX_CLASSES do
         local row = buffFrameRows[classId]
-        local status = BuildClassBuffStatus(classId)
+        local status = BuildClassBuffStatus(classId, snapshot)
         if row and status then
             visibleRows = visibleRows + 1
-            SetSecureBuffAttributes(row, SelectClassBuffTask(classId))
+            SetSecureBuffAttributes(row, SelectClassBuffTask(classId, snapshot))
             if not (InCombatLockdown and InCombatLockdown()) then
                 row:ClearAllPoints()
                 row:SetPoint("TOPLEFT", buffFrame, "TOPLEFT", 12, -76 - ((visibleRows - 1) * 29))
@@ -1597,17 +1678,13 @@ RefreshBuffFrame = function()
         buffFrame.popup:Hide()
     end
 
-    AddActionTooltip(buffFrame.castButton, "PallyBuffs cast button", {
-        { key = "Left-click", text = task and ("Cast " .. tostring(task.blessingName) .. " for " .. tostring(task.className) .. ".") or "No missing buff to cast." },
-        { text = "Uses the same safe PreClick pattern as PallyPower: one real click prepares and casts the next missing or expiring buff." },
-        { text = "The list below shows missing buffs and remaining time." },
-    })
+    buffFrame.castButton.wowNoteTooltipTask = task
 end
 
-Refresh = function()
+Refresh = function(syncNativeState, skipOverlayQueue)
     if not frame or not scrollChild then return end
 
-    SyncFromPallyPower()
+    if syncNativeState then SyncFromPallyPower() end
     for i = 1, table.getn(rows) do
         rows[i]:Hide()
     end
@@ -1619,7 +1696,7 @@ Refresh = function()
         if infoText then
             infoText:SetText("Only current party / raid paladins are shown. No assignment rows are rendered when none are present.")
         end
-        RefreshBuffFrame()
+        if not skipOverlayQueue and QueueVisualRefresh then QueueVisualRefresh(0, EnsureConfig().buffFrameVisible) end
         return
     end
 
@@ -1739,8 +1816,11 @@ Refresh = function()
     end
 
     scrollChild:SetHeight(math.max(260, table.getn(pallies) * 32 + 10))
-    SetStatus("Visible paladins: " .. table.getn(pallies) .. (IsTestModeEnabled() and " | Test Mode" or "") .. (IsPallyPowerLoaded() and " | Native compatible client detected" or " | Standalone mode"))
-    RefreshBuffFrame()
+    SetStatus("Visible paladins: " .. table.getn(pallies)
+        .. " | Spec " .. tostring(GetActiveTalentGroupKey())
+        .. (IsTestModeEnabled() and " | Test Mode" or "")
+        .. (IsPallyPowerLoaded() and " | Native compatible client detected" or " | Standalone mode"))
+    if not skipOverlayQueue and QueueVisualRefresh then QueueVisualRefresh(0, EnsureConfig().buffFrameVisible) end
 end
 
 local function CreateHeaderIcon(parent, x, classId)
@@ -1809,7 +1889,7 @@ local function CreateUI()
 
     local refreshButton = MakeButton(frame, "Refresh", 74, 24)
     refreshButton:SetPoint("LEFT", requestButton, "RIGHT", 8, 0)
-    refreshButton:SetScript("OnClick", function() Refresh() end)
+    refreshButton:SetScript("OnClick", function() Refresh(true) end)
 
     local clearButton = MakeButton(frame, "Clear", 68, 24)
     clearButton:SetPoint("LEFT", refreshButton, "RIGHT", 8, 0)
@@ -1935,10 +2015,13 @@ local function CreateUI()
 end
 
 function WowNote_OpenPallyBuffs()
+    if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("pallyBuffs") then
+        Print("PallyBuffs is disabled in WowNote settings.")
+        return
+    end
     CreateUI()
     frame:Show()
     RaiseFrame(frame)
-    Refresh()
 end
 
 function WowNote_PallyPower_RequestSync()
@@ -1953,55 +2036,291 @@ function WowNote_PallyPower_SetTestMode(enabled)
     end
 end
 
-local eventFrame = CreateFrame("Frame")
+local refreshScheduler = CreateFrame("Frame")
+local eventFrame
+local pendingVisualAt
+local pendingRosterAt
+local pendingSaveAt
+local pendingShowConfiguredBuffFrame
+local pendingRefreshAssignmentUI
+
+local function IsPallyBuffsModuleEnabled()
+    return not (WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("pallyBuffs"))
+end
+
+local function HasVisiblePallyUI()
+    return (frame and frame:IsVisible()) or (buffFrame and buffFrame:IsShown())
+end
+
+local function HasVisibleBuffOverlay()
+    return buffFrame and buffFrame:IsShown()
+end
+
+local function ClearPendingRefreshes()
+    pendingVisualAt = nil
+    pendingRosterAt = nil
+    pendingSaveAt = nil
+    pendingShowConfiguredBuffFrame = nil
+    pendingRefreshAssignmentUI = nil
+end
+
+local function EarliestPendingTime()
+    local earliest = pendingVisualAt
+    if pendingRosterAt and (not earliest or pendingRosterAt < earliest) then earliest = pendingRosterAt end
+    if pendingSaveAt and (not earliest or pendingSaveAt < earliest) then earliest = pendingSaveAt end
+    return earliest
+end
+
+local ProcessScheduledWork
+local ArmRefreshScheduler
+
+local function StopRefreshSchedulerIfIdle()
+    if EarliestPendingTime() then return false end
+    WowNoteProfiler_SetScript(refreshScheduler, "OnUpdate", "PallyBuffs.RefreshScheduler", nil)
+    return true
+end
+
+local function RunVisibleRefresh(allowConfiguredBuffFrame, refreshAssignmentUI)
+    if refreshAssignmentUI and frame and frame:IsVisible() then
+        Refresh(false, true)
+    end
+    if buffFrame and buffFrame:IsShown() then
+        RefreshBuffFrame()
+    elseif allowConfiguredBuffFrame and EnsureConfig().buffFrameVisible and IsPlayerPaladin() then
+        RefreshBuffFrame()
+    end
+end
+
+local function RefreshSchedulerOnUpdate()
+    local due = EarliestPendingTime()
+    local now = GetTime and GetTime() or 0
+    if due and now >= due then ProcessScheduledWork() end
+end
+
+ArmRefreshScheduler = function()
+    if not EarliestPendingTime() then
+        StopRefreshSchedulerIfIdle()
+        return
+    end
+    -- The scheduler exists only while work is pending. This avoids permanent
+    -- background polling and stays compatible with unmodified 3.3.5a clients.
+    WowNoteProfiler_SetScript(refreshScheduler, "OnUpdate", "PallyBuffs.RefreshScheduler", RefreshSchedulerOnUpdate)
+end
+
+ProcessScheduledWork = function()
+    if not IsPallyBuffsModuleEnabled() then
+        ClearPendingRefreshes()
+        StopRefreshSchedulerIfIdle()
+        return
+    end
+
+    local now = GetTime and GetTime() or 0
+    local rosterDue = pendingRosterAt and now >= pendingRosterAt
+    local visualDue = pendingVisualAt and now >= pendingVisualAt
+    local saveDue = pendingSaveAt and now >= pendingSaveAt
+
+    if rosterDue then
+        pendingRosterAt = nil
+        if WowNoteProfiler_AddCounter then WowNoteProfiler_AddCounter("PallyBuffs.rosterRefreshes", 1) end
+        SyncFromPallyPower()
+        AnnounceSelf()
+        pendingRefreshAssignmentUI = true
+        visualDue = true
+    end
+    if saveDue then
+        pendingSaveAt = nil
+        if WowNoteProfiler_AddCounter then WowNoteProfiler_AddCounter("PallyBuffs.assignmentSaves", 1) end
+        SavePallyAssignments()
+    end
+    if visualDue then
+        local allowConfiguredBuffFrame = pendingShowConfiguredBuffFrame == true
+        local refreshAssignmentUI = pendingRefreshAssignmentUI == true
+        pendingVisualAt = nil
+        pendingShowConfiguredBuffFrame = nil
+        pendingRefreshAssignmentUI = nil
+        if WowNoteProfiler_AddCounter then WowNoteProfiler_AddCounter("PallyBuffs.visualRefreshes", 1) end
+        if HasVisiblePallyUI() or allowConfiguredBuffFrame then
+            RunVisibleRefresh(allowConfiguredBuffFrame, refreshAssignmentUI)
+        end
+    end
+
+    if not StopRefreshSchedulerIfIdle() then ArmRefreshScheduler() end
+end
+
+QueueVisualRefresh = function(delay, allowConfiguredBuffFrame, refreshAssignmentUI)
+    if not HasVisiblePallyUI() and not allowConfiguredBuffFrame then return end
+    local now = GetTime and GetTime() or 0
+    local due = now + (tonumber(delay) or 0)
+    if not pendingVisualAt or due < pendingVisualAt then pendingVisualAt = due end
+    if allowConfiguredBuffFrame then pendingShowConfiguredBuffFrame = true end
+    if refreshAssignmentUI then pendingRefreshAssignmentUI = true end
+    ArmRefreshScheduler()
+end
+
+local function QueueRosterRefresh(delay)
+    local now = GetTime and GetTime() or 0
+    local due = now + (tonumber(delay) or ROSTER_REFRESH_DELAY)
+    if not pendingRosterAt or due < pendingRosterAt then pendingRosterAt = due end
+    ArmRefreshScheduler()
+end
+
+local function QueueSavedAssignmentRefresh(delay)
+    local now = GetTime and GetTime() or 0
+    local due = now + (tonumber(delay) or SAVE_REFRESH_DELAY)
+    if not pendingSaveAt or due < pendingSaveAt then pendingSaveAt = due end
+    ArmRefreshScheduler()
+end
+
+local function IsRelevantAuraUnit(unit)
+    unit = tostring(unit or "")
+    if unit == "player" or unit == "pet" then return true end
+    if string.find(unit, "^party%d+$") or string.find(unit, "^partypet%d+$") then return true end
+    if string.find(unit, "^raid%d+$") or string.find(unit, "^raidpet%d+$") then return true end
+    return false
+end
+
+local function ApplyTalentGroupProfile()
+    local newKey = GetActiveTalentGroupKey()
+    if loadedTalentGroup and loadedTalentGroup ~= newKey then
+        SavePallyAssignments(loadedTalentGroup)
+        LoadSavedPallyAssignments(newKey, true)
+        if WowNoteProfiler_AddCounter then WowNoteProfiler_AddCounter("PallyBuffs.specProfileSwitches", 1) end
+        AnnounceSelf()
+        SendPP("REQ")
+        QueueVisualRefresh(0, EnsureConfig().buffFrameVisible, true)
+        SetStatus("Loaded PallyBuffs profile for talent spec " .. tostring(newKey) .. ".")
+    else
+        loadedTalentGroup = newKey
+        AnnounceSelf()
+        QueueVisualRefresh(AURA_REFRESH_DELAY, false, frame and frame:IsVisible())
+    end
+end
+
+function WowNote_PallyBuffs_SetEnabled(enabled)
+    if WowNoteProfiler_SetGauge then WowNoteProfiler_SetGauge("PallyBuffs.moduleEnabled", enabled and 1 or 0) end
+    if not enabled then
+        -- During early addon initialization the settings module may apply the
+        -- disabled state before saved assignments have been loaded. Only save
+        -- after a talent-group profile is known, otherwise an empty runtime
+        -- table could overwrite the persisted profile.
+        if loadedTalentGroup then SavePallyAssignments(loadedTalentGroup) end
+        ClearPendingRefreshes()
+        StopRefreshSchedulerIfIdle()
+        if frame then frame:Hide() end
+        if buffFrame then buffFrame:Hide() end
+        if UpdateRuntimeEventRegistration then UpdateRuntimeEventRegistration(false) end
+        return
+    end
+    EnsureConfig()
+    loadedTalentGroup = loadedTalentGroup or GetActiveTalentGroupKey()
+    SetFreeAssignEnabled(IsFreeAssignEnabled(), false)
+    if UpdateRuntimeEventRegistration then UpdateRuntimeEventRegistration(true) end
+    QueueRosterRefresh(0.05)
+    if EnsureConfig().buffFrameVisible and IsPlayerPaladin() then
+        QueueVisualRefresh(0, true)
+    end
+end
+
+eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
-eventFrame:RegisterEvent("CHAT_MSG_ADDON")
-eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
-eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
-eventFrame:RegisterEvent("UNIT_AURA")
-eventFrame:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4)
-    local moduleEnabled = not (WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("pallyBuffs"))
+
+UpdateRuntimeEventRegistration = function(enabled)
+    if not eventFrame then return end
+    enabled = enabled and IsPallyBuffsModuleEnabled()
+    local baseEvents = {
+        "CHAT_MSG_ADDON", "RAID_ROSTER_UPDATE", "PARTY_MEMBERS_CHANGED",
+        "PLAYER_ENTERING_WORLD", "ZONE_CHANGED_NEW_AREA", "PLAYER_REGEN_ENABLED",
+        "ACTIVE_TALENT_GROUP_CHANGED", "PLAYER_TALENT_UPDATE", "SPELLS_CHANGED", "PLAYER_LOGOUT"
+    }
+    local overlayEvents = { "UNIT_AURA", "UNIT_PET", "UNIT_SPELLCAST_SUCCEEDED" }
+    local i
+    for i = 1, table.getn(baseEvents) do
+        if enabled then
+            eventFrame:RegisterEvent(baseEvents[i])
+        elseif eventFrame.UnregisterEvent then
+            eventFrame:UnregisterEvent(baseEvents[i])
+        end
+    end
+    local trackOverlay = enabled and HasVisibleBuffOverlay()
+    for i = 1, table.getn(overlayEvents) do
+        if trackOverlay then
+            eventFrame:RegisterEvent(overlayEvents[i])
+        elseif eventFrame.UnregisterEvent then
+            eventFrame:UnregisterEvent(overlayEvents[i])
+        end
+    end
+end
+
+WowNoteProfiler_SetScript(eventFrame, "OnEvent", "PallyBuffs.Events", function(self, event, arg1, arg2, arg3, arg4)
+    local moduleEnabled = IsPallyBuffsModuleEnabled()
     if event == "ADDON_LOADED" then
         if arg1 == ADDON_NAME or arg1 == "WoWNote" or arg1 == "PallyPower" then
             if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix(PP_PREFIX) end
             EnsureConfig()
-            LoadSavedPallyAssignments()
+            loadedTalentGroup = GetActiveTalentGroupKey()
+            LoadSavedPallyAssignments(loadedTalentGroup, false)
             RegisterSlashCommands()
+            UpdateRuntimeEventRegistration(moduleEnabled)
             if moduleEnabled then
                 SyncFromPallyPower()
                 SetFreeAssignEnabled(IsFreeAssignEnabled(), false)
                 AnnounceSelf()
-                if frame and frame:IsVisible() then Refresh() else RefreshBuffFrame() end
+                QueueVisualRefresh(0, EnsureConfig().buffFrameVisible)
             end
         end
     elseif event == "PLAYER_LOGIN" then
         if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix(PP_PREFIX) end
         EnsureConfig()
-        LoadSavedPallyAssignments()
+        loadedTalentGroup = GetActiveTalentGroupKey()
+        LoadSavedPallyAssignments(loadedTalentGroup, true)
         RegisterSlashCommands()
+        UpdateRuntimeEventRegistration(moduleEnabled)
         if moduleEnabled then
             SyncFromPallyPower()
             SetFreeAssignEnabled(IsFreeAssignEnabled(), false)
             AnnounceSelf()
-            RefreshBuffFrame()
+            if EnsureConfig().buffFrameVisible then QueueVisualRefresh(0, true) end
         end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, distribution, sender = arg1, arg2, arg3, arg4
         if moduleEnabled and prefix == PP_PREFIX then
+            if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", PP_PREFIX .. " " .. tostring(distribution or "?"), string.len(tostring(message or "")), true) end
             ParseAddonMessage(sender, message)
-            SavePallyAssignments()
-            if frame and frame:IsVisible() then Refresh() else RefreshBuffFrame() end
+            QueueSavedAssignmentRefresh(SAVE_REFRESH_DELAY)
+            QueueVisualRefresh(COMM_REFRESH_DELAY, false, frame and frame:IsVisible())
         end
+    elseif event == "RAID_ROSTER_UPDATE" or event == "PARTY_MEMBERS_CHANGED"
+        or event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+        if moduleEnabled then QueueRosterRefresh(ROSTER_REFRESH_DELAY) end
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        if moduleEnabled then QueueVisualRefresh(0, false, frame and frame:IsVisible()) end
     elseif event == "UNIT_AURA" then
-        if moduleEnabled then
-            RefreshBuffFrame()
+        if moduleEnabled and HasVisibleBuffOverlay() and IsRelevantAuraUnit(arg1) then
+            QueueVisualRefresh(AURA_REFRESH_DELAY)
         end
-    else
+    elseif event == "UNIT_PET" then
+        if moduleEnabled and HasVisibleBuffOverlay() then
+            QueueVisualRefresh(AURA_REFRESH_DELAY)
+        end
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if moduleEnabled and HasVisibleBuffOverlay() and arg1 == "player" then
+            QueueVisualRefresh(SPELLCAST_REFRESH_DELAY)
+        end
+    elseif event == "PLAYER_LOGOUT" then
+        if moduleEnabled then SavePallyAssignments(loadedTalentGroup or GetActiveTalentGroupKey()) end
+    elseif event == "ACTIVE_TALENT_GROUP_CHANGED" then
+        if moduleEnabled then ApplyTalentGroupProfile() end
+    elseif event == "PLAYER_TALENT_UPDATE" or event == "SPELLS_CHANGED" then
         if moduleEnabled then
-            SyncFromPallyPower()
-            AnnounceSelf()
-            if frame and frame:IsVisible() then Refresh() else RefreshBuffFrame() end
+            if GetActiveTalentGroupKey() ~= loadedTalentGroup then
+                ApplyTalentGroupProfile()
+            else
+                AnnounceSelf()
+                QueueVisualRefresh(AURA_REFRESH_DELAY, false, frame and frame:IsVisible())
+            end
         end
     end
 end)
+
+UpdateRuntimeEventRegistration(IsPallyBuffsModuleEnabled())

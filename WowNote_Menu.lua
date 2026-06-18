@@ -208,6 +208,7 @@ function WowNote_BuildSideMenu(parent, makeButton)
             { text = "Cursor Effects", moduleKey = "cursorEffects", tooltip = "Configure animated effects that follow the mouse cursor.", func = function() if WowNote_OpenCursorEffects then WowNote_OpenCursorEffects() else Print("Cursor Effects module is not loaded.") end end },
             { text = "Screen Draw", tooltip = "Open the free screen drawing overlay.", func = function() if WowNote_OpenScreenDraw then WowNote_OpenScreenDraw() else Print("Screen Draw module is not loaded.") end end },
             { text = "Tactical Board", tooltip = "Open the tactical drawing board for raid tactics.", func = function() if WowNote_OpenTacticalMap then WowNote_OpenTacticalMap() else Print("Tactical Board module is not loaded.") end end },
+            { text = "Profiler", tooltip = "Profile only WowNote handlers, memory, communication and stutter attribution. Disabled by default.", func = function() if WowNote_OpenProfiler then WowNote_OpenProfiler() else Print("Profiler module is not loaded.") end end },
             { text = "Clear Tactical HUD", tooltip = "Clear the active tactical HUD overlay.", func = function() if WowNote_HudDraw_Clear then WowNote_HudDraw_Clear() else Print("Tactical HUD module is not loaded.") end end },
         })
     end, "Open raid planning, Bite Helper, cursor effects, PallyBuffs and draw tools.")

@@ -368,7 +368,7 @@ end
 
 local init = CreateFrame("Frame")
 init:RegisterEvent("PLAYER_LOGIN")
-init:SetScript("OnEvent", function()
+WowNoteProfiler_SetScript(init, "OnEvent", "CharacterNotes.Init", function()
     EnsureDB()
     InstallUnitPopup()
     if GameTooltip.HookScript then

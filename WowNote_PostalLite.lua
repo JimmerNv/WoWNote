@@ -85,7 +85,7 @@ local function StopWorker(doneMessage)
     openAllActive = false
     openAllIdleCycles = 0
     openAllSafetyCycles = 0
-    if workerFrame then workerFrame:SetScript("OnUpdate", nil) end
+    if workerFrame then WowNoteProfiler_SetScript(workerFrame, "OnUpdate", "Postal.OpenAllWorker", nil) end
     if doneMessage then
         Print("Open All done. Looted: " .. tostring(openAllLooted) .. ", deleted empty: " .. tostring(openAllDeleted) .. ".")
     end
@@ -175,7 +175,7 @@ local function StartWorker()
     openAllDeleted = 0
     workerFrame = workerFrame or CreateFrame("Frame")
     local elapsed = 0
-    workerFrame:SetScript("OnUpdate", function(self, delta)
+    WowNoteProfiler_SetScript(workerFrame, "OnUpdate", "Postal.OpenAllWorker", function(self, delta)
         elapsed = elapsed + (delta or 0)
         if elapsed < 0.50 then return end
         elapsed = 0
@@ -273,7 +273,7 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
-frame:SetScript("OnEvent", function(self, event)
+WowNoteProfiler_SetScript(frame, "OnEvent", "Postal.Events", function(self, event)
     if event == "MAIL_CLOSED" then StopWorker(false) end
     UpdateToolbar()
 end)

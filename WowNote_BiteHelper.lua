@@ -22,7 +22,9 @@ local FALLBACK_PROTOCOL_VERSION = "WN1"
 local MESSAGE_KIND = "B"
 local LEGACY_ADDON_PREFIX = "WNBITE"
 local LEGACY_PROTOCOL_VERSION = "B1"
-local CHAT_PROTOCOL_VERSION = "C2"
+local CHAT_PROTOCOL_VERSION = "C3"
+local LEGACY_CHAT_PROTOCOL_VERSION = "C2"
+local MAX_CHAT_MESSAGE_LENGTH = 230
 local MAX_CHUNK = 180
 local MAX_TRANSFER_CHUNKS = 64
 local MAX_BITE_ROWS = 10
@@ -51,6 +53,11 @@ local testDirection = 0
 local runtimeRows
 local overlayElapsed = 0
 local chatSyncFiltersRegistered = false
+local eventFrame
+local overlayUpdateHandler
+local backgroundMonitoringActive = false
+local rosterMonitoringActive = false
+local RefreshBackgroundMonitoring
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then
@@ -335,6 +342,49 @@ local function BuildAuraBaseline()
     for i = 1, table.getn(roster) do lastAuraState[roster[i]] = HasEssence(roster[i]) end
 end
 
+local function IsBiteModuleEnabled()
+    return not WowNote_IsModuleEnabled or WowNote_IsModuleEnabled("biteHelper")
+end
+
+local function IsBiteHudActive()
+    if not IsBiteModuleEnabled() or not overlayFrame or not overlayFrame.IsShown or not overlayFrame:IsShown() then return false end
+    local _, char = EnsureDB()
+    return char.overlayVisible == true
+end
+
+local function SetEventRegistration(frame, eventName, enabled)
+    if not frame then return end
+    if enabled then
+        frame:RegisterEvent(eventName)
+    else
+        frame:UnregisterEvent(eventName)
+    end
+end
+
+RefreshBackgroundMonitoring = function()
+    local hudActive = IsBiteHudActive()
+    local editorActive = editorFrame and editorFrame.IsShown and editorFrame:IsShown() or false
+    local rosterNeeded = hudActive or editorActive
+    local becameActive = hudActive and not backgroundMonitoringActive
+
+    backgroundMonitoringActive = hudActive
+    rosterMonitoringActive = rosterNeeded
+
+    if overlayFrame and overlayFrame.SetScript then
+        WowNoteProfiler_SetScript(overlayFrame, "OnUpdate", "BiteHelper.HUD", hudActive and overlayUpdateHandler or nil)
+    end
+    if not hudActive then overlayElapsed = 0 end
+
+    if eventFrame then
+        SetEventRegistration(eventFrame, "COMBAT_LOG_EVENT_UNFILTERED", hudActive)
+        SetEventRegistration(eventFrame, "UNIT_AURA", hudActive)
+        SetEventRegistration(eventFrame, "RAID_ROSTER_UPDATE", rosterNeeded)
+        SetEventRegistration(eventFrame, "PARTY_MEMBERS_CHANGED", rosterNeeded)
+    end
+
+    if becameActive then BuildAuraBaseline() end
+end
+
 local function EnsureFirstRow(rows)
     if table.getn(rows) == 0 then
         table.insert(rows, { assignments = { { source = "", target = "", completed = false } } })
@@ -451,7 +501,7 @@ local function ResetProgress(rows)
             rows[rowIndex].assignments[assignmentIndex].skipped = nil
         end
     end
-    BuildAuraBaseline()
+    if IsBiteHudActive() then BuildAuraBaseline() else lastAuraState = {} end
 end
 
 local function MarkBiteCompleted(sourceName, targetName, reason)
@@ -597,10 +647,8 @@ local function ValidateRows(rows)
 end
 
 local function FormatOrderLines(rows, transferId)
-    local lines = {
-        "WoWNote Bite Helper: Bite Order [" .. CHAT_PROTOCOL_VERSION .. ":"
-            .. tostring(transferId or "") .. ":" .. tostring(table.getn(rows or {})) .. "]"
-    }
+    local formattedRows = {}
+    local requiresChunkProtocol = false
     local rowIndex
     for rowIndex = 1, table.getn(rows or {}) do
         local entries = {}
@@ -612,7 +660,49 @@ local function FormatOrderLines(rows, transferId)
             local target = NormalizeName(assignment.target)
             if source ~= "" and target ~= "" then table.insert(entries, source .. " > " .. target) end
         end
-        if table.getn(entries) > 0 then table.insert(lines, "WN: Bite " .. rowIndex .. ": " .. table.concat(entries, ", ")) end
+
+        if table.getn(entries) > 0 then
+            local chunks = {}
+            local current = {}
+            local reservedPrefixLength = string.len("WN: Bite " .. rowIndex .. " [99/99]: ")
+            local entryIndex
+            for entryIndex = 1, table.getn(entries) do
+                local entry = entries[entryIndex]
+                local candidateLength = reservedPrefixLength + string.len(table.concat(current, ", "))
+                if table.getn(current) > 0 then candidateLength = candidateLength + 2 end
+                candidateLength = candidateLength + string.len(entry)
+                if candidateLength > MAX_CHAT_MESSAGE_LENGTH and table.getn(current) > 0 then
+                    table.insert(chunks, table.concat(current, ", "))
+                    current = { entry }
+                else
+                    table.insert(current, entry)
+                end
+            end
+            if table.getn(current) > 0 then table.insert(chunks, table.concat(current, ", ")) end
+            if table.getn(chunks) > 1 then requiresChunkProtocol = true end
+            formattedRows[rowIndex] = chunks
+        end
+    end
+
+    -- Keep the C2 wire format for normal orders so older WowNote versions can
+    -- still receive them. C3 is only required when a row must be split.
+    local protocolVersion = requiresChunkProtocol and CHAT_PROTOCOL_VERSION or LEGACY_CHAT_PROTOCOL_VERSION
+    local lines = {
+        "WoWNote Bite Helper: Bite Order [" .. protocolVersion .. ":"
+            .. tostring(transferId or "") .. ":" .. tostring(table.getn(rows or {})) .. "]"
+    }
+
+    for rowIndex = 1, table.getn(rows or {}) do
+        local chunks = formattedRows[rowIndex] or {}
+        if protocolVersion == LEGACY_CHAT_PROTOCOL_VERSION then
+            if chunks[1] then table.insert(lines, "WN: Bite " .. rowIndex .. ": " .. chunks[1]) end
+        else
+            local chunkCount = table.getn(chunks)
+            local chunkIndex
+            for chunkIndex = 1, chunkCount do
+                table.insert(lines, "WN: Bite " .. rowIndex .. " [" .. chunkIndex .. "/" .. chunkCount .. "]: " .. chunks[chunkIndex])
+            end
+        end
     end
     return lines
 end
@@ -635,7 +725,7 @@ local function EnsureSendFrame()
     sendFrame = CreateFrame("Frame")
     sendFrame:Hide()
     sendFrame.elapsed = 0
-    sendFrame:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(sendFrame, "OnUpdate", "BiteHelper.SendQueue", function(self, elapsed)
         self.elapsed = self.elapsed + (elapsed or 0)
         if self.elapsed < 0.06 then return end
         self.elapsed = 0
@@ -643,6 +733,8 @@ local function EnsureSendFrame()
         if not packet then self:Hide(); return end
         local ok, result = pcall(SendAddonMessage, packet.prefix, packet.message, packet.channel, packet.target)
         local sent = ok and result ~= false
+        if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", tostring(packet.prefix or "?") .. " " .. tostring(packet.channel or "?"), string.len(tostring(packet.message or "")), sent) end
+        if WowNoteProfiler_SetGauge then WowNoteProfiler_SetGauge("BiteHelper.SendQueueDepth", table.getn(sendQueue)) end
         Debug("send " .. tostring(packet.prefix) .. " " .. tostring(packet.channel)
             .. " packet " .. tostring(packet.seq) .. "/" .. tostring(packet.total)
             .. " id=" .. tostring(packet.id) .. " result=" .. tostring(sent))
@@ -664,6 +756,7 @@ local function QueueAddonPacket(prefix, message, channel, target, id, seq, total
         seq = seq,
         total = total,
     })
+    if WowNoteProfiler_SetGauge then WowNoteProfiler_SetGauge("BiteHelper.SendQueueDepth", table.getn(sendQueue)) end
 end
 
 local function GetSyncRecipients()
@@ -737,7 +830,13 @@ local function PostOrder()
     local transferId = BuildTransferId()
     local lines = FormatOrderLines(rows, transferId)
     local i
-    for i = 1, table.getn(lines) do SendChatMessage(lines[i], "RAID") end
+    for i = 1, table.getn(lines) do
+        local ok, result = pcall(SendChatMessage, lines[i], "RAID")
+        if not ok or result == false then
+            Print("Could not post the bite order to raid chat: " .. tostring(ok and "message rejected" or result or "unknown error"))
+            return false
+        end
+    end
     local synchronized = SendOrderSync(rows, transferId)
     ApplyRuntimeOrder(rows)
     if synchronized then
@@ -805,6 +904,7 @@ end
 local function HandleAddonMessage(prefix, message, channel, sender)
     if type(message) ~= "string" then return end
     if prefix ~= ADDON_PREFIX and prefix ~= FALLBACK_ADDON_PREFIX and prefix ~= LEGACY_ADDON_PREFIX then return end
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", tostring(prefix or "?") .. " " .. tostring(channel or "?"), string.len(message), true) end
     Debug("recv prefix=" .. tostring(prefix) .. " channel=" .. tostring(channel)
         .. " sender=" .. tostring(sender) .. " bytes=" .. tostring(string.len(message)))
 
@@ -877,9 +977,20 @@ local function HandleAddonMessage(prefix, message, channel, sender)
 end
 
 local function ParseChatAssignmentRow(message)
-    local rowIndexText, entriesText = string.match(tostring(message or ""), "^WN: Bite (%d+): (.+)$")
+    message = tostring(message or "")
+    local rowIndexText, partIndexText, partCountText, entriesText = string.match(message,
+        "^WN: Bite (%d+) %[(%d+)/(%d+)%]: (.+)$")
+    if not rowIndexText then
+        rowIndexText, entriesText = string.match(message, "^WN: Bite (%d+): (.+)$")
+        partIndexText, partCountText = "1", "1"
+    end
+
     local rowIndex = tonumber(rowIndexText)
+    local partIndex = tonumber(partIndexText)
+    local partCount = tonumber(partCountText)
     if not rowIndex or rowIndex < 1 or rowIndex > MAX_BITE_ROWS then return nil end
+    if not partIndex or not partCount or partIndex < 1 or partCount < 1 or partIndex > partCount
+        or partCount > MAX_ASSIGNMENTS_PER_ROW then return nil end
 
     local row = { assignments = {} }
     local entries = Split(entriesText, ", ")
@@ -892,7 +1003,7 @@ local function ParseChatAssignmentRow(message)
         table.insert(row.assignments, { source = source, target = target, completed = false })
     end
     if table.getn(row.assignments) == 0 then return nil end
-    return rowIndex, row
+    return rowIndex, row, partIndex, partCount
 end
 
 local function FinishChatTransfer(key, sender)
@@ -932,7 +1043,8 @@ local function HandleChatSyncMessage(message, sender, eventName)
         "^WoWNote Bite Helper: Bite Order %[(C%d+):([^:]+):(%d+)%]$")
     if version then
         local total = tonumber(totalText)
-        if version ~= CHAT_PROTOCOL_VERSION or not total or total < 1 or total > MAX_BITE_ROWS then
+        if (version ~= CHAT_PROTOCOL_VERSION and version ~= LEGACY_CHAT_PROTOCOL_VERSION)
+            or not total or total < 1 or total > MAX_BITE_ROWS then
             Debug("ignored invalid raid-chat Bite Order header from " .. sender)
             return
         end
@@ -948,6 +1060,7 @@ local function HandleChatSyncMessage(message, sender, eventName)
                 total = total,
                 count = 0,
                 rows = {},
+                rowParts = {},
                 started = GetTime and GetTime() or 0,
             }
         end
@@ -956,7 +1069,7 @@ local function HandleChatSyncMessage(message, sender, eventName)
         return
     end
 
-    local rowIndex, row = ParseChatAssignmentRow(message)
+    local rowIndex, row, partIndex, partCount = ParseChatAssignmentRow(message)
     if not rowIndex then return end
     if eventName ~= "CHAT_MSG_RAID_LEADER" and not IsLeaderOrAssistant(sender) then
         Debug("ignored raid-chat Bite row from non-lead/non-assist " .. sender)
@@ -974,10 +1087,48 @@ local function HandleChatSyncMessage(message, sender, eventName)
         Debug("ignored raid-chat Bite row " .. rowIndex .. " beyond expected " .. buffer.total)
         return
     end
+
+    buffer.rowParts = buffer.rowParts or {}
+    local partState = buffer.rowParts[rowIndex]
+    if type(partState) ~= "table" then
+        partState = { total = partCount, count = 0, parts = {} }
+        buffer.rowParts[rowIndex] = partState
+    elseif partState.total ~= partCount then
+        Debug("ignored raid-chat Bite row " .. rowIndex .. " with inconsistent part count")
+        return
+    end
+
+    if partState.parts[partIndex] then
+        Debug("ignored duplicate raid-chat Bite row " .. rowIndex .. " part " .. partIndex)
+        return
+    end
+    partState.parts[partIndex] = row
+    partState.count = partState.count + 1
+    if partState.count < partState.total then
+        Debug("raid-chat fallback receive " .. key .. " row " .. rowIndex .. " part "
+            .. partIndex .. "/" .. partCount)
+        return
+    end
+
+    local combined = { assignments = {} }
+    local currentPart
+    for currentPart = 1, partState.total do
+        local partRow = partState.parts[currentPart]
+        if type(partRow) ~= "table" then return end
+        local assignmentIndex
+        for assignmentIndex = 1, table.getn(partRow.assignments or {}) do
+            table.insert(combined.assignments, partRow.assignments[assignmentIndex])
+        end
+    end
+    if table.getn(combined.assignments) > MAX_ASSIGNMENTS_PER_ROW then
+        Debug("ignored raid-chat Bite row " .. rowIndex .. " with too many combined assignments")
+        return
+    end
+
     if not buffer.rows[rowIndex] then buffer.count = buffer.count + 1 end
-    buffer.rows[rowIndex] = row
+    buffer.rows[rowIndex] = combined
     Debug("raid-chat fallback receive " .. key .. " row " .. rowIndex .. "/" .. buffer.total
-        .. " count=" .. buffer.count)
+        .. " parts=" .. partCount .. " count=" .. buffer.count)
     FinishChatTransfer(key, sender)
 end
 
@@ -1236,14 +1387,20 @@ local function CreateOverlay()
     overlayFrame.direction.text = overlayFrame.direction:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     overlayFrame.direction.text:SetPoint("TOP", overlayFrame.direction, "BOTTOM", 0, 2)
 
-    overlayFrame:SetScript("OnUpdate", function(self, elapsed)
+    overlayUpdateHandler = function(self, elapsed)
+        if not backgroundMonitoringActive then return end
         overlayElapsed = overlayElapsed + (elapsed or 0)
         local pulse = 0.55 + (0.45 * math.abs(math.sin((GetTime and GetTime() or 0) * 3)))
         local j
         for j = 1, table.getn(self.chainButtons) do if self.chainButtons[j].glow:IsShown() then self.chainButtons[j].glow:SetAlpha(pulse) end end
         self.direction.glow:SetAlpha(pulse)
-        if overlayElapsed >= 0.25 then overlayElapsed = 0; if WowNote_BiteHelper_RefreshOverlay then WowNote_BiteHelper_RefreshOverlay() end end
-    end)
+        if overlayElapsed >= 0.25 then
+            overlayElapsed = 0
+            if WowNote_BiteHelper_RefreshOverlay then WowNote_BiteHelper_RefreshOverlay() end
+        end
+    end
+    overlayFrame:SetScript("OnShow", function() if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end end)
+    overlayFrame:SetScript("OnHide", function() if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end end)
     overlayFrame:Hide()
 end
 
@@ -1263,9 +1420,18 @@ end
 function WowNote_BiteHelper_RefreshOverlay()
     CreateOverlay()
     local db, char = EnsureDB()
-    if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("biteHelper") then overlayFrame:Hide(); return end
-    if not char.overlayVisible then overlayFrame:Hide(); return end
+    if not IsBiteModuleEnabled() then
+        overlayFrame:Hide()
+        if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
+        return
+    end
+    if not char.overlayVisible then
+        overlayFrame:Hide()
+        if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
+        return
+    end
     overlayFrame:Show()
+    if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
     if db.testMode then overlayFrame.testLabel:Show() else overlayFrame.testLabel:Hide() end
     overlayFrame.lock:SetNormalTexture(char.overlayLocked and "Interface\\Buttons\\LockButton-Locked-Up" or "Interface\\Buttons\\LockButton-Unlocked-Up")
     if char.overlayLocked then
@@ -1360,7 +1526,7 @@ local function CreateDragGhost()
     dragGhost:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 8, edgeSize = 8, insets = { left = 2, right = 2, top = 2, bottom = 2 } })
     dragGhost:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
     dragGhost.text = dragGhost:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall"); dragGhost.text:SetPoint("CENTER")
-    dragGhost:SetScript("OnUpdate", function(self)
+    WowNoteProfiler_SetScript(dragGhost, "OnUpdate", "BiteHelper.DragGhost", function(self)
         local scale = UIParent:GetEffectiveScale()
         local x, y = GetCursorPosition()
         self:ClearAllPoints(); self:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x / scale, y / scale)
@@ -1428,6 +1594,8 @@ local function CreateEditor()
     editorFrame:SetMovable(true); editorFrame:EnableMouse(true); editorFrame:RegisterForDrag("LeftButton")
     editorFrame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     editorFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    editorFrame:SetScript("OnShow", function() if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end end)
+    editorFrame:SetScript("OnHide", function() if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end end)
     editorFrame:SetBackdrop({ bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background", edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border", tile = true, tileSize = 32, edgeSize = 32, insets = { left = 11, right = 12, top = 12, bottom = 11 } })
     editorFrame:Hide()
 
@@ -1622,18 +1790,26 @@ function WowNote_BiteHelper_RefreshEditor()
 end
 
 function WowNote_OpenBiteHelper(openEditor)
-    if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("biteHelper") then Print("Bite Helper module is disabled."); return end
+    if not IsBiteModuleEnabled() then Print("Bite Helper module is disabled."); return end
     EnsureDB(); CreateOverlay()
     local _, char = EnsureDB(); char.overlayVisible = true; overlayFrame:Show()
     if openEditor ~= false then CreateEditor(); WowNote_BiteHelper_RefreshEditor(); editorFrame:Show(); if RaiseFrame then RaiseFrame(editorFrame) elseif editorFrame.Raise then editorFrame:Raise() end end
+    if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
     WowNote_BiteHelper_RefreshOverlay()
 end
 
 function WowNote_BiteHelper_SetEnabled(enabled)
-    if not enabled then if editorFrame then editorFrame:Hide() end; if overlayFrame then overlayFrame:Hide() end else WowNote_BiteHelper_RefreshOverlay() end
+    if not enabled then
+        if editorFrame then editorFrame:Hide() end
+        if overlayFrame then overlayFrame:Hide() end
+    else
+        WowNote_BiteHelper_RefreshOverlay()
+    end
+    if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
 end
 
 local function CheckAuraTransitions()
+    if not IsBiteHudActive() then return end
     local db = EnsureDB(); if db.testMode then return end
     local roster = GetRoster(); local i
     for i = 1, table.getn(roster) do
@@ -1661,30 +1837,35 @@ WowNote_BiteHelper_TestAPI = {
     HandleChatSyncMessage = HandleChatSyncMessage,
     SendOrderSync = SendOrderSync,
     FormatOrderLines = FormatOrderLines,
+    IsHudActive = IsBiteHudActive,
+    IsBackgroundMonitoringActive = function() return backgroundMonitoringActive end,
+    IsRosterMonitoringActive = function() return rosterMonitoringActive end,
+    RefreshBackgroundMonitoring = function() if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end end,
+    GetOverlayFrame = function() return overlayFrame end,
+    GetEditorFrame = function() return editorFrame end,
+    GetEventFrame = function() return eventFrame end,
 }
 
-local eventFrame = CreateFrame("Frame")
+eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 eventFrame:RegisterEvent("CHAT_MSG_RAID")
 eventFrame:RegisterEvent("CHAT_MSG_RAID_LEADER")
 eventFrame:RegisterEvent("CHAT_MSG_RAID_WARNING")
-eventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
-eventFrame:RegisterEvent("UNIT_AURA")
-eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
-eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-eventFrame:SetScript("OnEvent", function(self, event, ...)
+WowNoteProfiler_SetScript(eventFrame, "OnEvent", "BiteHelper.Events", function(self, event, ...)
     if event == "ADDON_LOADED" then
         local addonName = select(1, ...)
         if addonName == "WoWNote" then EnsureDB(); RegisterCommPrefixes(); RegisterChatSyncFilters() end
     elseif event == "PLAYER_LOGIN" then
         local db, char = EnsureDB(); RegisterCommPrefixes(); RegisterChatSyncFilters()
         char.overlayVisible = false
-        runtimeRows = DeepCopyRows(db.testMode and db.testRows or db.rows); BuildAuraBaseline()
+        runtimeRows = DeepCopyRows(db.testMode and db.testRows or db.rows)
+        lastAuraState = {}
         if overlayFrame then overlayFrame:Hide() end
         if editorFrame then editorFrame:Hide() end
+        if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
     elseif event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = select(1, ...), select(2, ...), select(3, ...), select(4, ...)
         Debug("CHAT_MSG_ADDON event prefix=" .. tostring(prefix) .. " channel=" .. tostring(channel)
@@ -1693,18 +1874,26 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "CHAT_MSG_RAID" or event == "CHAT_MSG_RAID_LEADER" or event == "CHAT_MSG_RAID_WARNING" then
         HandleChatSyncMessage(select(1, ...), select(2, ...), event)
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
+        if not IsBiteHudActive() then return end
         local _, subEvent, _, sourceName, _, _, destName, _, spellId, spellName = ...
         local lowerSpell = string.lower(tostring(spellName or ""))
         if (subEvent == "SPELL_CAST_SUCCESS" or subEvent == "SPELL_AURA_APPLIED") and (BITE_SPELL_IDS[tonumber(spellId or 0)] or string.find(lowerSpell, "vampiric bite", 1, true)) then
             MarkBiteCompleted(sourceName, destName, "combat log")
         end
-    elseif event == "UNIT_AURA" then CheckAuraTransitions()
+    elseif event == "UNIT_AURA" then
+        if IsBiteHudActive() then CheckAuraTransitions() end
     elseif event == "RAID_ROSTER_UPDATE" or event == "PARTY_MEMBERS_CHANGED" then
         if editorFrame and editorFrame:IsShown() then WowNote_BiteHelper_RefreshEditor() end
-        if overlayFrame and overlayFrame:IsShown() then WowNote_BiteHelper_RefreshOverlay() end
-    elseif event == "PLAYER_REGEN_ENABLED" then if secureRebuildPending then secureRebuildPending = false; WowNote_BiteHelper_RefreshOverlay() end
+        if IsBiteHudActive() then WowNote_BiteHelper_RefreshOverlay() end
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        if secureRebuildPending and IsBiteHudActive() then
+            secureRebuildPending = false
+            WowNote_BiteHelper_RefreshOverlay()
+        end
     end
 end)
+
+if RefreshBackgroundMonitoring then RefreshBackgroundMonitoring() end
 
 SLASH_WOWNOTEBITE1 = "/wnbite"
 SLASH_WOWNOTEBITE2 = "/bitehelper"

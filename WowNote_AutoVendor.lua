@@ -324,7 +324,7 @@ local function ScheduleSellSummary(itemCount, estimatedCopper, beforeMoney)
     }
     if not summaryFrame then
         summaryFrame = CreateFrame("Frame")
-        summaryFrame:SetScript("OnUpdate", function(self, elapsed)
+        WowNoteProfiler_SetScript(summaryFrame, "OnUpdate", "AutoVendor.SummaryDelay", function(self, elapsed)
             if not pendingSellSummary then
                 self:Hide()
                 return
@@ -443,7 +443,7 @@ EnsureVendorDB()
 if not eventFrame then
     eventFrame = CreateFrame("Frame")
     eventFrame:RegisterEvent("MERCHANT_SHOW")
-    eventFrame:SetScript("OnEvent", function(self, event)
+    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoVendor.Events", function(self, event)
         if event == "MERCHANT_SHOW" then
             OnMerchantShow()
         end
