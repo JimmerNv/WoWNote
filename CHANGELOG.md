@@ -1,3 +1,143 @@
+## 1.14.66
+
+- Fixed Bite Helper raid-chat synchronization on clients where visible raid messages were not reaching the module's normal event frame.
+- Added a non-blocking chat-frame filter as a second receive path for Bite Order headers and rows.
+- Trusted the dedicated raid-leader chat event when private-server roster rank data is stale.
+- Prevented duplicate event/filter delivery from resetting an in-progress chat transfer.
+- Made the Player HUD background and title bar always draggable outside combat and added a visible drag hint.
+
+## 1.14.65
+
+- Fixed Bite Helper synchronization on servers that report successful RAID addon sends but do not deliver them to other clients.
+- Added direct `WNOTE` addon whispers to every raid member while retaining both RAID addon-message routes.
+- Added a validated raid-chat fallback protocol that reconstructs Bite rows from the visible leader/assistant post and automatically opens the receiver player HUD.
+- Added transfer deduplication across addon and raid-chat routes plus duplicate ACK suppression.
+- Fixed `/wnbite debug on` so it actually enables communication diagnostics and logs both addon events and raid-chat fallback reception.
+- Made the player HUD unlocked after the one-time migration, clamped it to the screen, and kept its title bar draggable even while the HUD is locked.
+- Re-ran Lua 5.1 syntax checks, TOC/load-order checks, full addon initialization, central UI/slash-command flows, and targeted Bite Helper sync/HUD regression tests.
+
+## 1.14.64
+
+- Reworked Bite Helper synchronization to use the established `WowNote` addon prefix with a `WNOTE` fallback route.
+- Added paced packet sending, duplicate suppression, receiver acknowledgements, and detailed `/wn debug on` diagnostics for Bite Order synchronization.
+- Made raid lead/assistant validation case-insensitive for incoming sync messages.
+- Added a visible drag bar when the player HUD is unlocked and enabled dragging from target fields as well as the overlay background.
+- Kept the corrected directional arrow behavior unchanged.
+- Re-ran full initialization, UI, module, sync, SavedVariables, slash-command, and event regression tests.
+
+## 1.14.63
+
+- Automatically skips the current Bite assignment when its target is dead, marks it as skipped, and advances to the next valid target without waiting for a Bite aura.
+- Corrected the directional arrow calculation to the WoW 3.3.5 map/facing convention used by established DBM/TomTom-style navigation logic.
+- Switched Bite Order synchronization to WowNote's established `WNOTE` addon prefix and retained legacy `WNBITE` receive compatibility.
+- Received Bite Orders now explicitly open the player overlay without opening the editor.
+- Added packet-send error reporting and kept raid-chat posting separate from structured addon synchronization.
+- Improved TEST MODE kill/revive behavior so automatic dead-target skipping can be tested and reversed.
+- Re-ran the complete WowNote release-gate checks after the Bite Helper changes.
+
+## 1.14.62
+
+- Fixed the Bite Helper editor crash on WoW 3.3.5a by replacing the unavailable `Button:SetEnabled()` method with the supported `Enable()` / `Disable()` flow.
+- Added a strict WoW 3.3.5a compatibility check for every frame method and global API used by the Bite Helper.
+- Hardened nested Bite Helper SavedVariables so invalid rows, assignments, roster entries, anchor points, and numeric offsets cannot break initialization or editor opening.
+- Added bounds and validation for received Bite Helper synchronization chunks and rejects malformed or invalid remote bite orders.
+- Added comprehensive Bite Helper tests for editor controls, drag-and-drop, row propagation, test mode, secure targeting, combat deferral, dead/revive state, directional arrows, posting, addon sync, combat-log progression, aura fallback, and module enable/disable.
+- Re-ran the complete WowNote initialization, window, event, and module regression suite on the final package.
+
+## 1.14.61
+
+- Fixed Bite Helper editor crashes on WoW 3.3.5a by replacing unavailable `math.mod` calls with the Lua modulo operator.
+- Bite Helper overlay and editor now always start closed after login.
+- Received bite orders and local sync simulations still open the overlay immediately after login-safe initialization.
+- New Bite Helper installations default to a hidden overlay until opened manually or a raid order is received.
+- Hardened legacy note migration so string-based notes are preserved as valid GUID notes and invalid entries cannot break note actions.
+
+## 1.14.60
+
+- Added a Blood-Queen Lana'thel Bite Helper with a personal target overlay and raid-lead editor.
+- Added clickable secure target buttons, current-round holy highlighting, dead/revive indicators, and a best-effort directional arrow.
+- Added automatic progression from Vampiric Bite combat-log events with an Essence aura fallback.
+- Added raid-lead/assistant-only posting and chunked WoWNote addon-channel synchronization.
+- Added drag-and-drop bite-tree editing, automatic source generation for following rounds, row removal, and readable raid-chat output.
+- Added a full local TEST MODE with simulated roster, bite completion, previous/reset, kill/revive, direction rotation, and local sync controls.
+- Added Quality of Life menu, settings toggle, Titan menu, `/wn bite`, and `/wnbite` integration.
+
+## 1.14.59
+
+- Restored the original `_Cursor` 3.3.0.2 fullscreen model viewport semantics instead of parenting cursor models to the WowNote/UIParent frame.
+- Cursor controller is parentless again and each model uses `SetAllPoints(nil)`, matching the known-working standalone addon.
+- Removed the v1.14.58 custom projection/reset layer that did not change the in-game displacement and could alter model rendering on ultrawide layouts.
+- Restored the original cursor positioning and trail animation lifecycle while retaining WowNote settings, menu integration, and duplicate-addon suppression.
+- Re-ran all 17 module-flow tests plus fresh, existing, and malformed SavedVariables initialization scenarios.
+
+## 1.14.58
+
+- Fixed Cursor Effects rendering against an unanchored parent frame, which could stretch or offset effects on ultrawide resolutions.
+- Anchored the integrated cursor viewport explicitly to `UIParent` and anchored every model layer to that viewport.
+- Positions cursor models before showing them to prevent trails from drawing a long line from the screen origin.
+- Recalculates cursor projection metrics when resolution or UI scale changes.
+- Resets trail animations after activation, display changes, alt-tab-sized cursor jumps, cinematics, and mouselook transitions.
+- Re-ran the complete WowNote release-gate suite across initialization, SavedVariables, menus, windows, slash commands, and all modules.
+
+## 1.14.57
+
+- Added a full release-gate run across all WowNote modules using a Lua 5.1 / WoW 3.3.5a API mock environment.
+- Tested fresh, existing, and malformed SavedVariables initialization scenarios.
+- Tested all public window openers, main-menu and submenu routing, slash commands, and frame stacking/clickability constraints.
+- Exercised Notes and Character Notes CRUD, Bank Viewer selection/search/tooltips, Item Snapshots, Item Tracker/Restock, Loot Tools, Auto Sell/Repair/Roll, Mail Open All, Manabonk cleanup, Raid Planner, Raid IDs, PallyBuffs, Port Helper, Cursor Effects, Tactical UI, Talent Planner, Minimap, Social protections, and data-transfer round trips.
+- Fixed the main-menu `Send / Receive` action by exporting `WowNote_OpenShare` from its module-local implementation.
+- Removed a stray undeclared `statusText` global reference from the Raid Planner status updater.
+- Re-ran syntax, TOC, initialization, targeted module-flow, and final package verification after the fixes.
+
+## 1.14.56
+
+- Integrated Cursor Effects into WowNote as a native Quality of Life tool.
+- Added a dedicated `Cursor Effects` entry to the Quality of Life submenu.
+- Added a standalone WowNote-styled cursor configuration window with presets, layers, preview, offsets, scale, facing, custom model paths, saved sets, apply, and reset controls.
+- Stores saved sets account-wide and active cursor layers per character inside the existing WowNote SavedVariables.
+- Added `/wn cursor` and `/wncursor` shortcuts.
+- Added a module toggle for Cursor Effects and preserved automatic hiding during screenshots, cinematics, camera movement, and mouselook.
+- Namespaced all frames, globals, popups, and slash commands to avoid collisions with a separately installed `_Cursor` addon.
+- Migrates existing `_Cursor` saved sets and character layers when available, and suppresses duplicate standalone cursor effects while the integrated module is enabled.
+- Based on `_Cursor` 3.3.0.2 by Saiket.
+
+## 1.14.55
+
+- Hardened account-wide and per-character SavedVariables initialization across all modules.
+- Added type validation for module settings, minimap data, character notes, tactical maps, PallyBuffs assignments, Raid ID data, Port Helper state, snapshots, and HUD settings.
+- Prevents startup failures when older, incomplete, or malformed nested SavedVariables values are present.
+- Verified fresh-install startup, existing-data preservation, malformed-data recovery, TOC load order, all public UI openers, core events, slash commands, and Lua syntax with a WoW 3.3.5a API mock harness.
+
+## 1.14.54
+
+- Standardized WowNote dialog stacking to avoid windows blocking unrelated UI elements.
+- Replaced the Bank Viewer `TOOLTIP`/level 1000 setup with a normal top-level dialog configuration.
+- Removed unbounded frame-level escalation and use bounded dialog levels plus `Raise()` instead.
+- Reduced excessive child-frame offsets in Loot Tools, menus, Raid ID editing, Screen Draw, Tactical Board, and Tactical HUD controls.
+- Kept full-screen drawing overlays mouse-transparent outside explicit draw mode.
+- Added consistent base levels to the main editor, transfer dialogs, Character Notes, Item Tracker, Restock, Raid Planner, Port Helper, PallyBuffs, and other standalone windows.
+- Corrected the Raid ID row highlight texture path discovered during the full Lua syntax audit.
+
+## 1.14.49
+
+- Refined the Raid Planner Port Helper layout.
+- Moved the message field to its own full-width row.
+- Increased the channel field width and aligned labels and inputs consistently.
+- Shifted controls and request rows downward to avoid visual crowding.
+
+## 1.14.48
+
+- Port Helper now automatically removes summon requests after the player remains within approximate 40-yard group range for 0.75 seconds.
+- Added a short confirmation delay to avoid removing entries because of a single transient range update.
+
+## 1.14.42
+
+- Added a Raid Planner Port Helper with configurable reply code, chat channel, and announcement text.
+- Added typo-tolerant summon request detection for permutations such as `123`, `132`, and `1 2 3`.
+- Added one clickable character button per request to target the player for summoning.
+- Added group, offline, and approximate in-range status updates plus right-click removal.
+- Added `/wnport` to open the Port Helper directly.
+
 # v1.14.41
 
 - Reworked PostalLite Open All for Auction House item mails.
@@ -206,3 +346,11 @@ This project went through several transport experiments:
 - Channel payload escaping for WoW chat safety
 
 On the tested server, reliable user-facing share behavior could not be guaranteed because server-side chat throttling/muting interfered with larger transfers. The UI therefore no longer exposes the Share workflow.
+
+## 1.14.44
+
+- Added explicit Start Tracking / Stop Tracking controls to the Raid Planner Port Helper GUI.
+- Posting a port request now starts tracking automatically.
+- Added `/wnport start` and `/wnport stop` commands.
+- Chat requests and periodic range refreshes are ignored while tracking is stopped.
+- Added a visible tracking status indicator to the Port Helper window.
