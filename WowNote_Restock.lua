@@ -14,18 +14,40 @@ local lastAutoAttemptAt = 0
 local IsPending
 local ClearPendingBuys
 local PurchaseOneVendorUnit
+local RestockOnUpdate
+local SetRestockWorkerActive
+local HasPendingPurchase
+local SetPurchaseWatchActive
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg)) end
 end
 
+local function CopyTable(src)
+    if type(src) ~= "table" then return nil end
+    local out = {}
+    for k, v in pairs(src) do
+        if type(v) == "table" then out[k] = CopyTable(v) else out[k] = v end
+    end
+    return out
+end
+
 local function InitDB()
     if WowNote_Internal and WowNote_Internal.InitDB then WowNote_Internal.InitDB() end
     if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
-    if type(WowNoteCharDB.itemTracker) ~= "table" and type(WowNoteDB) == "table" and type(WowNoteDB.itemTracker) == "table" then
-        WowNoteCharDB.itemTracker = WowNoteDB.itemTracker
+    if type(WowNoteCharDB.itemTracker) ~= "table" then
+        WowNoteCharDB.itemTracker = {}
+        -- One-time legacy migration only. Never alias the account table directly;
+        -- Restock settings must persist in per-character SavedVariables.
+        if type(WowNoteDB) == "table" and type(WowNoteDB.itemTracker) == "table" then
+            if type(WowNoteDB.itemTracker.trackedItems) == "table" then
+                WowNoteCharDB.itemTracker.trackedItems = CopyTable(WowNoteDB.itemTracker.trackedItems)
+            end
+            if type(WowNoteDB.itemTracker.hud) == "table" then
+                WowNoteCharDB.itemTracker.hud = CopyTable(WowNoteDB.itemTracker.hud)
+            end
+        end
     end
-    if type(WowNoteCharDB.itemTracker) ~= "table" then WowNoteCharDB.itemTracker = {} end
     if type(WowNoteCharDB.itemTracker.trackedItems) ~= "table" then WowNoteCharDB.itemTracker.trackedItems = {} end
 end
 
@@ -56,6 +78,7 @@ local function EnsureFrame()
     frame = CreateFrame("Frame", "WowNoteRestockFrame", UIParent)
     frame:SetWidth(430); frame:SetHeight(260); frame:SetPoint("CENTER", UIParent, "CENTER", 0, -120)
     frame:SetFrameStrata("FULLSCREEN_DIALOG"); if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true); frame:SetMovable(true); frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -160,6 +183,11 @@ ClearPendingBuys = function()
     purchasePendingExpected = {}
 end
 
+HasPendingPurchase = function()
+    for _ in pairs(purchasePendingAt) do return true end
+    return false
+end
+
 PurchaseOneVendorUnit = function(buy, reason)
     if not buy or not buy.merchantIndex or not buy.itemId then return false end
     local itemId = tonumber(buy.itemId)
@@ -187,6 +215,8 @@ PurchaseOneVendorUnit = function(buy, reason)
         if reason == "auto" then autoBuyPending[itemId] = true; boughtThisMerchant[itemId] = true else manualBuyPending[itemId] = true end
         purchasePendingAt[itemId] = GetTime and GetTime() or time()
         purchasePendingExpected[itemId] = current + missing
+        if SetPurchaseWatchActive then SetPurchaseWatchActive(true) end
+        if SetRestockWorkerActive then SetRestockWorkerActive(true) end
         BuyMerchantItem(buy.merchantIndex, vendorUnits)
         SetStatus("Bought " .. tostring(vendorUnits) .. " vendor units for " .. tostring(missing) .. " missing items. Waiting for bag recount...")
         return true
@@ -234,15 +264,14 @@ function WowNote_OpenRestock()
 end
 
 local events = CreateFrame("Frame")
-events:RegisterEvent("MERCHANT_SHOW")
-events:RegisterEvent("MERCHANT_UPDATE")
-events:RegisterEvent("BAG_UPDATE")
-events:RegisterEvent("BAG_UPDATE_DELAYED")
-events:RegisterEvent("MERCHANT_CLOSED")
-events:SetScript("OnUpdate", function(self)
-    if not merchantOpen then return end
+
+RestockOnUpdate = function(self)
+    -- This worker is enabled only while a purchase timeout is pending. Older
+    -- builds left it active for the whole merchant session, causing hundreds of
+    -- OnUpdate calls while manually selling items.
     local now = GetTime and GetTime() or time()
     local changed = false
+    local stillPending = false
     for itemId, startedAt in pairs(purchasePendingAt) do
         if startedAt and (now - startedAt) > 1.25 then
             autoBuyPending[itemId] = nil
@@ -250,33 +279,78 @@ events:SetScript("OnUpdate", function(self)
             purchasePendingAt[itemId] = nil
             purchasePendingExpected[itemId] = nil
             changed = true
+        else
+            stillPending = true
         end
     end
     if changed then
         WowNote_Restock_CheckMerchant()
     end
-end)
-events:SetScript("OnEvent", function(self, event)
+    if not stillPending then
+        SetRestockWorkerActive(false)
+        if SetPurchaseWatchActive and not HasPendingPurchase() then SetPurchaseWatchActive(false) end
+    end
+end
+
+SetRestockWorkerActive = function(active)
+    if active then
+        WowNoteProfiler_SetScript(events, "OnUpdate", "Restock.MerchantWorker", RestockOnUpdate)
+    else
+        WowNoteProfiler_SetScript(events, "OnUpdate", "Restock.MerchantWorker", nil)
+    end
+end
+
+SetPurchaseWatchActive = function(active)
+    if active then
+        -- Watch bag changes only after WowNote itself buys something. Manual
+        -- merchant selling and ElvUI bag sorting must not keep Restock active.
+        events:RegisterEvent("BAG_UPDATE_DELAYED")
+    else
+        events:UnregisterEvent("BAG_UPDATE_DELAYED")
+    end
+end
+
+local function SetMerchantMonitoring(enabled)
+    if not enabled then
+        events:UnregisterEvent("MERCHANT_UPDATE")
+        events:UnregisterEvent("BAG_UPDATE")
+        SetPurchaseWatchActive(false)
+        SetRestockWorkerActive(false)
+    end
+end
+
+events:RegisterEvent("MERCHANT_SHOW")
+events:RegisterEvent("MERCHANT_CLOSED")
+WowNoteProfiler_SetScript(events, "OnEvent", "Restock.Events", function(self, event)
     if event == "MERCHANT_CLOSED" then
         merchantOpen = false
+        SetMerchantMonitoring(false)
         ClearPendingBuys()
         boughtThisMerchant = {}
         pendingBuys = {}
         if frame then frame:Hide() end
         return
     end
+    if event == "MERCHANT_UPDATE" then
+        return
+    end
     if event == "BAG_UPDATE" then
-        if merchantOpen then SetStatus("Bag update received. Waiting for final bag count...") end
         return
     end
     if event == "BAG_UPDATE_DELAYED" then
-        if not merchantOpen then return end
+        if not merchantOpen or not HasPendingPurchase() then return end
         ClearPendingBuys()
-        SetStatus("Bags recounted.")
+        SetPurchaseWatchActive(false)
+        SetRestockWorkerActive(false)
+        if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(true, false) end
+        SetStatus("Restock purchase counted. Rechecking merchant...")
         WowNote_Restock_CheckMerchant()
         return
     end
-    if event == "MERCHANT_SHOW" then boughtThisMerchant = {} end
-    merchantOpen = true
+    if event == "MERCHANT_SHOW" then
+        boughtThisMerchant = {}
+        merchantOpen = true
+        SetMerchantMonitoring(true)
+    end
     WowNote_Restock_CheckMerchant()
 end)

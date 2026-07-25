@@ -35,23 +35,168 @@ local function Trim(text)
     return text
 end
 
-local function EnsureDB()
-    if type(WowNoteCharDB) ~= "table" then
-        WowNoteCharDB = {}
+local AUTO_LOOT_KEYS = {
+    "enabled",
+    "quality",
+    "minPlayerLevel",
+    "useMaxItemLevel",
+    "maxItemLevel",
+    "preferDisenchant",
+    "blacklist",
+    "savedAt",
+    "savedBy",
+    "storageVersion",
+    "explicitSave",
+}
+
+local AUTO_LOOT_DEFAULTS = {
+    enabled = false,
+    quality = 2,
+    minPlayerLevel = 80,
+    useMaxItemLevel = true,
+    maxItemLevel = 220,
+    preferDisenchant = true,
+    blacklist = "",
+}
+
+local AUTO_LOOT_STORAGE_VERSION = 3
+
+local function GetCharacterStorageKey()
+    local name = UnitName and UnitName("player") or nil
+    local realm = GetRealmName and GetRealmName() or nil
+    name = Trim(name or "")
+    realm = Trim(realm or "")
+    if name == "" or name == "Unknown" or name == UNKNOWNOBJECT then name = "Unknown" end
+    if realm == "" then realm = "UnknownRealm" end
+    return realm .. " - " .. name
+end
+
+local function EnsurePrimaryDB()
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    -- Single authoritative Auto Roll store for v1.15.40+: per-character SavedVariables.
+    -- This is the path that is declared in the TOC through WowNoteCharDB and is used by
+    -- both the Loot Tools tab and the standalone Auto Loot Roller logic.
+    if type(WowNoteCharDB.autoLootRoller) ~= "table" then WowNoteCharDB.autoLootRoller = {} end
+    return WowNoteCharDB.autoLootRoller
+end
+
+local function EnsureLootToolsMirrorDB()
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.lootToolsAutoRoll) ~= "table" then WowNoteCharDB.lootToolsAutoRoll = {} end
+    return WowNoteCharDB.lootToolsAutoRoll
+end
+
+local function EnsureAccountBackupDB()
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.autoLootRollerByChar) ~= "table" then WowNoteDB.autoLootRollerByChar = {} end
+    local key = GetCharacterStorageKey()
+    if type(WowNoteDB.autoLootRollerByChar[key]) ~= "table" then WowNoteDB.autoLootRollerByChar[key] = {} end
+    return WowNoteDB.autoLootRollerByChar[key]
+end
+
+local function CopyAutoLootValues(source, target, onlyMissing)
+    if type(source) ~= "table" or type(target) ~= "table" then return end
+    for _, key in ipairs(AUTO_LOOT_KEYS) do
+        if source[key] ~= nil and (not onlyMissing or target[key] == nil) then
+            target[key] = source[key]
+        end
     end
-    if type(WowNoteCharDB.autoLootRoller) ~= "table" then
-        WowNoteCharDB.autoLootRoller = {}
+end
+
+local function ApplyAutoLootDefaults(settings)
+    if type(settings) ~= "table" then return end
+    for key, value in pairs(AUTO_LOOT_DEFAULTS) do
+        if settings[key] == nil then settings[key] = value end
+    end
+    settings.storageVersion = AUTO_LOOT_STORAGE_VERSION
+end
+
+local function GetNow()
+    if time then return time() end
+    if GetTime then return math.floor(GetTime()) end
+    return 0
+end
+
+local function HasAnyAutoRollValues(source)
+    if type(source) ~= "table" then return false end
+    return source.enabled ~= nil
+        or source.quality ~= nil
+        or source.preferDisenchant ~= nil
+        or source.useMaxItemLevel ~= nil
+        or source.minPlayerLevel ~= nil
+        or source.maxItemLevel ~= nil
+        or source.blacklist ~= nil
+end
+
+local function SyncCompatibilityCopies(settings)
+    if type(settings) ~= "table" then return end
+
+    -- Mirrors are write-only compatibility copies. They must never win over the
+    -- per-character primary store again, because that caused stale checkbox values
+    -- to reappear after relog.
+    local mirror = EnsureLootToolsMirrorDB()
+    CopyAutoLootValues(settings, mirror, false)
+    mirror.storageVersion = AUTO_LOOT_STORAGE_VERSION
+    mirror.explicitSave = settings.explicitSave == true
+    mirror.savedAt = settings.savedAt
+    mirror.savedBy = settings.savedBy
+
+    local backup = EnsureAccountBackupDB()
+    CopyAutoLootValues(settings, backup, false)
+    backup.storageVersion = AUTO_LOOT_STORAGE_VERSION
+    backup.explicitSave = settings.explicitSave == true
+    backup.savedAt = settings.savedAt
+    backup.savedBy = settings.savedBy
+end
+
+local function EnsureDB()
+    local settings = EnsurePrimaryDB()
+
+    -- One-time migration only when the authoritative store is still empty.
+    -- Existing primary values, including explicit false checkboxes, are never
+    -- overwritten by mirrors or account backups.
+    if not HasAnyAutoRollValues(settings) then
+        local mirror = EnsureLootToolsMirrorDB()
+        if HasAnyAutoRollValues(mirror) then
+            CopyAutoLootValues(mirror, settings, false)
+        end
     end
 
-    local settings = WowNoteCharDB.autoLootRoller
-    if settings.enabled == nil then settings.enabled = false end
-    if settings.quality == nil then settings.quality = 2 end
-    if settings.minPlayerLevel == nil then settings.minPlayerLevel = 80 end
-    if settings.useMaxItemLevel == nil then settings.useMaxItemLevel = true end
-    if settings.maxItemLevel == nil then settings.maxItemLevel = 220 end
-    if settings.preferDisenchant == nil then settings.preferDisenchant = true end
-    if settings.blacklist == nil then settings.blacklist = "" end
+    ApplyAutoLootDefaults(settings)
+    SyncCompatibilityCopies(settings)
     return settings
+end
+
+function WowNote_GetAutoLootRollerSettings()
+    return EnsureDB()
+end
+
+function WowNote_SaveAutoLootRollerSettings(values)
+    local settings = EnsurePrimaryDB()
+    if type(values) == "table" then
+        CopyAutoLootValues(values, settings, false)
+    end
+    ApplyAutoLootDefaults(settings)
+    settings.savedAt = GetNow()
+    settings.savedBy = "loot-tools-save"
+    settings.explicitSave = true
+    SyncCompatibilityCopies(settings)
+    return settings
+end
+
+function WowNote_DebugAutoLootRollerStorage()
+    local settings = EnsurePrimaryDB()
+    local mirror = EnsureLootToolsMirrorDB()
+    local backup = EnsureAccountBackupDB()
+    Print("Auto Roll primary: enabled=" .. tostring(settings.enabled)
+        .. ", DE=" .. tostring(settings.preferDisenchant)
+        .. ", useIlvl=" .. tostring(settings.useMaxItemLevel)
+        .. ", savedAt=" .. tostring(settings.savedAt)
+        .. ", explicit=" .. tostring(settings.explicitSave)
+        .. " | mirror enabled=" .. tostring(mirror.enabled)
+        .. ", savedAt=" .. tostring(mirror.savedAt)
+        .. " | backup enabled=" .. tostring(backup.enabled)
+        .. ", savedAt=" .. tostring(backup.savedAt))
 end
 
 local function SetStatus(text)
@@ -85,24 +230,37 @@ local function UpdateControlsFromSettings()
 end
 
 local function SaveControlsToSettings()
-    local settings = EnsureDB()
-    if enabledCheck then settings.enabled = enabledCheck:GetChecked() and true or false end
-    if preferDisenchantCheck then settings.preferDisenchant = preferDisenchantCheck:GetChecked() and true or false end
-    if useMaxItemLevelCheck then settings.useMaxItemLevel = useMaxItemLevelCheck:GetChecked() and true or false end
-    if minPlayerLevelEdit then settings.minPlayerLevel = ToNumber(minPlayerLevelEdit:GetText(), 80) end
-    if maxItemLevelEdit then settings.maxItemLevel = ToNumber(maxItemLevelEdit:GetText(), 220) end
-    if blacklistEdit then settings.blacklist = blacklistEdit:GetText() or "" end
+    local values = {
+        enabled = enabledCheck and enabledCheck:GetChecked() and true or false,
+        preferDisenchant = preferDisenchantCheck and preferDisenchantCheck:GetChecked() and true or false,
+        useMaxItemLevel = useMaxItemLevelCheck and useMaxItemLevelCheck:GetChecked() and true or false,
+        minPlayerLevel = ToNumber(minPlayerLevelEdit and minPlayerLevelEdit:GetText(), 80),
+        maxItemLevel = ToNumber(maxItemLevelEdit and maxItemLevelEdit:GetText(), 220),
+        blacklist = blacklistEdit and blacklistEdit:GetText() or "",
+    }
+    local settings
+    if WowNote_SaveAutoLootRollerSettings then
+        settings = WowNote_SaveAutoLootRollerSettings(values)
+    else
+        settings = EnsureDB()
+        CopyAutoLootValues(values, settings, false)
+        settings.savedAt = GetNow()
+    end
     UpdateControlsFromSettings()
+    local saved = WowNote_GetAutoLootRollerSettings and WowNote_GetAutoLootRollerSettings() or settings
+    SetStatus("Auto Roll saved: enabled=" .. tostring(saved.enabled) .. ", DE=" .. tostring(saved.preferDisenchant) .. ", ilvl=" .. tostring(saved.useMaxItemLevel) .. ", savedAt=" .. tostring(saved.savedAt))
 end
 
 local function RaiseFrame(target)
     if not target then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(target)
+        return
+    end
     target:SetFrameStrata("FULLSCREEN_DIALOG")
     target:SetFrameLevel(100)
     target:SetToplevel(true)
-    if target.Raise then
-        target:Raise()
-    end
+    if target.Raise then target:Raise() end
 end
 
 local function MakeLabel(parent, text, x, y)
@@ -157,7 +315,7 @@ local function MakeTextArea(parent, width, height, x, y)
             ScrollingEdit_OnCursorChanged(self, cx, cy, cw, ch)
         end
     end)
-    edit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(edit, "OnUpdate", "AutoLootRoller.EditBox", function(self, elapsed)
         if ScrollingEdit_OnUpdate then
             ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
         end
@@ -199,7 +357,11 @@ local function CycleQuality()
             break
         end
     end
-    settings.quality = nextValue
+    if WowNote_SaveAutoLootRollerSettings then
+        WowNote_SaveAutoLootRollerSettings({ quality = nextValue })
+    else
+        settings.quality = nextValue
+    end
     UpdateControlsFromSettings()
 end
 
@@ -378,6 +540,13 @@ local function EvaluateRoll(rollID, attempt)
         return true
     end
 
+    if WowNote_IsItemProtected and (WowNote_IsItemProtected(item.link) or WowNote_IsItemProtected(item.name)) then
+        if attempt == 1 then
+            Print("Auto roll skipped " .. (item.link or item.name or "loot") .. ": protected item.")
+        end
+        return true
+    end
+
     local blacklisted, blacklistReason = IsBlacklisted(item)
     if blacklisted then
         if attempt == 1 then
@@ -543,7 +712,12 @@ end
 
 function WowNote_ToggleAutoLootRoller()
     local settings = EnsureDB()
-    settings.enabled = not settings.enabled
+    local enabled = not settings.enabled
+    if WowNote_SaveAutoLootRollerSettings then
+        settings = WowNote_SaveAutoLootRollerSettings({ enabled = enabled })
+    else
+        settings.enabled = enabled
+    end
     Print("Auto loot roller " .. (settings.enabled and "enabled" or "disabled") .. ".")
     UpdateControlsFromSettings()
 end
@@ -553,14 +727,14 @@ local function RegisterEvents()
     eventFrame = CreateFrame("Frame")
     eventFrame:RegisterEvent("START_LOOT_ROLL")
     eventFrame:RegisterEvent("CANCEL_LOOT_ROLL")
-    eventFrame:SetScript("OnEvent", function(self, event, rollID)
+    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoLootRoller.Events", function(self, event, rollID)
         if event == "START_LOOT_ROLL" and rollID then
             QueueRoll(rollID)
         elseif event == "CANCEL_LOOT_ROLL" and rollID then
             RemoveQueuedRoll(rollID)
         end
     end)
-    eventFrame:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(eventFrame, "OnUpdate", "AutoLootRoller.PendingRolls", function(self, elapsed)
         ProcessPendingRolls(elapsed or 0)
     end)
     eventFrame:Hide()

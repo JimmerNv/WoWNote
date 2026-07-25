@@ -39,7 +39,7 @@ local function MakeButton(parent, text, width, height)
     local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     b:SetSize(width or 80, height or 22)
     b:SetText(text or "Button")
-    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 120) end
+    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 5) end
     b:Enable()
     b:EnableMouse(true)
     return b
@@ -47,22 +47,27 @@ end
 
 local function LiftControl(control, parent, offset)
     if control and control.SetFrameLevel and parent and parent.GetFrameLevel then
-        control:SetFrameLevel((parent:GetFrameLevel() or 0) + (offset or 120))
+        control:SetFrameLevel((parent:GetFrameLevel() or 0) + (offset or 5))
     end
     if control and control.EnableMouse then control:EnableMouse(true) end
     if control and control.Enable then control:Enable() end
 end
 
 local function EnsureDB()
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.tacticalMaps = WowNoteDB.tacticalMaps or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.tacticalMaps) ~= "table" then WowNoteDB.tacticalMaps = {} end
 end
 
 local function SetFront(f)
     if not f then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(f)
+        return
+    end
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(1200)
+    f:SetFrameLevel(100)
     if f.SetToplevel then f:SetToplevel(true) end
+    if f.Raise then f:Raise() end
 end
 
 local function BoardSize()
@@ -289,6 +294,13 @@ local function AddLinePoints(x1, y1, x2, y2, stroke)
     end
 end
 
+local function DrawingOnUpdate(self)
+    if not isDrawing or not currentStroke or not drawMode then return end
+    local x, y = GetCursorBoardPosition()
+    local dx, dy = x - (lastX or x), y - (lastY or y)
+    if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
+end
+
 local function StartStroke()
     local x, y = GetCursorBoardPosition()
     currentStroke = { color = currentColorIndex, size = thickness, points = {}, textures = {} }
@@ -296,10 +308,12 @@ local function StartStroke()
     lastX, lastY = x, y
     AddDot(x, y, currentStroke)
     isDrawing = true
+    if board then WowNoteProfiler_SetScript(board, "OnUpdate", "TacticalMap.Drawing", DrawingOnUpdate) end
 end
 
 local function StopStroke()
     isDrawing = false
+    if board then WowNoteProfiler_SetScript(board, "OnUpdate", "TacticalMap.Drawing", nil) end
     currentStroke = nil
     lastX, lastY = nil, nil
 end
@@ -397,7 +411,6 @@ local function ShowTransfer(mode)
         transferFrame:SetSize(560, 330)
         transferFrame:SetPoint("CENTER")
         SetFront(transferFrame)
-        transferFrame:SetFrameLevel(980)
         transferFrame:EnableMouse(true)
         transferFrame:SetMovable(true)
         transferFrame:RegisterForDrag("LeftButton")
@@ -410,7 +423,7 @@ local function ShowTransfer(mode)
         transferFrame.title:SetPoint("TOP", 0, -12)
         local close = CreateFrame("Button", nil, transferFrame, "UIPanelCloseButton")
         close:SetPoint("TOPRIGHT", -4, -4)
-        close:SetFrameLevel(transferFrame:GetFrameLevel() + 20)
+        close:SetFrameLevel(transferFrame:GetFrameLevel() + 10)
         close:EnableMouse(true)
         close:Enable()
         close:SetScript("OnMouseDown", function() transferFrame:Hide() end)
@@ -420,7 +433,7 @@ local function ShowTransfer(mode)
         local scroll = CreateFrame("ScrollFrame", "WowNoteTacticalTransferScroll", transferFrame, "UIPanelScrollFrameTemplate")
         scroll:SetPoint("TOPLEFT", 18, -42)
         scroll:SetPoint("BOTTOMRIGHT", -34, 58)
-        scroll:SetFrameLevel(transferFrame:GetFrameLevel() + 8)
+        scroll:SetFrameLevel(transferFrame:GetFrameLevel() + 3)
         scroll:EnableMouse(true)
 
         transferEdit = CreateFrame("EditBox", "WowNoteTacticalTransferEdit", scroll)
@@ -439,7 +452,7 @@ local function ShowTransfer(mode)
 
         local action = MakeButton(transferFrame, "Action", 90, 24)
         action:SetPoint("BOTTOMLEFT", 18, 18)
-        action:SetFrameLevel(transferFrame:GetFrameLevel() + 20)
+        action:SetFrameLevel(transferFrame:GetFrameLevel() + 5)
         action:SetScript("OnMouseDown", function()
             if transferFrame.mode ~= "import" then
                 transferEdit:SetFocus()
@@ -472,9 +485,7 @@ local function ShowTransfer(mode)
     end
     transferFrame:Show()
     SetFront(transferFrame)
-    transferFrame:SetFrameLevel(980)
-    transferFrame:Raise()
-    if transferFrame.closeButton then transferFrame.closeButton:SetFrameLevel(transferFrame:GetFrameLevel() + 20) end
+    if transferFrame.closeButton then transferFrame.closeButton:SetFrameLevel(transferFrame:GetFrameLevel() + 10) end
 end
 
 local function GetPresetNames()
@@ -530,7 +541,7 @@ local function RefreshPresetList()
             row:SetScript("OnClick", SelectPreset)
             presetRows[i] = row
         end
-        row:SetFrameLevel((frame:GetFrameLevel() or 0) + 260)
+        row:SetFrameLevel((frame:GetFrameLevel() or 0) + 5)
         row.text:SetDrawLayer("OVERLAY", 7)
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", frame, "TOPLEFT", listX, listY - ((i - 1) * rowHeight))
@@ -636,7 +647,9 @@ local function ShareDrawing()
         local id = tostring(time and time() or GetTime())
         for i = 1, total do
             local chunk = string.sub(text, ((i - 1) * max) + 1, i * max)
-            SendAddonMessage("WowNote", "TAC:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk, "RAID")
+            local packet = "TAC:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk
+            SendAddonMessage("WowNote", packet, "RAID")
+            if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WowNote RAID TAC", string.len(packet), true) end
         end
         Print("Shared tactical drawing to raid (" .. total .. " packets).")
     else
@@ -648,6 +661,7 @@ local incoming = {}
 local function OnAddonMessage(prefix, msg, channel, sender)
     if prefix ~= "WowNote" or type(msg) ~= "string" then return end
     local id, idx, total, chunk = string.match(msg, "^TAC:([^:]+):(%d+):(%d+):(.+)$")
+    if id and WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", "WowNote " .. tostring(channel or "?") .. " TAC", string.len(msg), true) end
     if not id then return end
     idx, total = tonumber(idx), tonumber(total)
     if not idx or not total then return end
@@ -668,7 +682,7 @@ local function EnsureReceiver()
     if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix("WowNote") end
     receiveFrame = CreateFrame("Frame")
     receiveFrame:RegisterEvent("CHAT_MSG_ADDON")
-    receiveFrame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
+    WowNoteProfiler_SetScript(receiveFrame, "OnEvent", "TacticalMap.CommEvents", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
 end
 
 local function CreateUI()
@@ -698,7 +712,7 @@ local function CreateUI()
     title:SetText("WowNote Tactical Board")
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
-    LiftControl(close, frame, 160)
+    LiftControl(close, frame, 10)
     close:SetScript("OnClick", function() frame:Hide() end)
 
     local nameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -740,7 +754,7 @@ local function CreateUI()
     for i, c in ipairs(colors) do
         local b = CreateFrame("Button", nil, frame)
         b:SetSize(22, 22)
-        LiftControl(b, frame, 140)
+        LiftControl(b, frame, 5)
         b:SetPoint("TOPLEFT", frame, "TOPLEFT", 22 + ((i - 1) * 28), -118)
         b.tex = b:CreateTexture(nil, "BACKGROUND")
         b.tex:SetAllPoints(b)
@@ -783,7 +797,7 @@ local function CreateUI()
     presetScrollFrame = CreateFrame("Frame", nil, frame)
     presetScrollFrame:SetPoint("TOPLEFT", frame, "TOPLEFT", 656, -166)
     presetScrollFrame:SetSize(224, 370)
-    presetScrollFrame:SetFrameLevel((frame:GetFrameLevel() or 0) + 120)
+    presetScrollFrame:SetFrameLevel((frame:GetFrameLevel() or 0) + 2)
     presetScrollFrame:EnableMouse(false)
     presetScrollFrame.bg = presetScrollFrame:CreateTexture(nil, "BACKGROUND")
     presetScrollFrame.bg:SetAllPoints(presetScrollFrame)
@@ -803,7 +817,7 @@ local function CreateUI()
     listRefreshBtn:SetScript("OnClick", RefreshPresetList)
 
     board = CreateFrame("Frame", "WowNoteTacticalBoardCanvas", frame)
-    board:SetFrameLevel((frame:GetFrameLevel() or 0) + 20)
+    board:SetFrameLevel((frame:GetFrameLevel() or 0) + 2)
     board:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -150)
     board:SetSize(620, 470)
     board:EnableMouse(false)
@@ -824,12 +838,6 @@ local function CreateUI()
     board.border:SetBackdropBorderColor(0.7, 0.7, 0.7, 1)
     board:SetScript("OnMouseDown", function(_, button) if button == "LeftButton" and drawMode then StartStroke() end end)
     board:SetScript("OnMouseUp", function() StopStroke() end)
-    board:SetScript("OnUpdate", function()
-        if not isDrawing or not currentStroke or not drawMode then return end
-        local x, y = GetCursorBoardPosition()
-        local dx, dy = x - (lastX or x), y - (lastY or y)
-        if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
-    end)
     board:SetScript("OnSizeChanged", function()
         LayoutBoardTiles()
     end)

@@ -104,6 +104,11 @@ local function DestroyMischiefMakerFromBags()
     local bag, slot = FindMischiefMakerInBags()
     if not bag then return false end
 
+    if WowNote_IsBagSlotProtected and WowNote_IsBagSlotProtected(bag, slot) then
+        Print("Skipped deleting The Mischief Maker because it is protected in WowNote Item Protection.")
+        return false
+    end
+
     PickupContainerItem(bag, slot)
     if CursorHasItem() then
         DeleteCursorItem()
@@ -148,10 +153,10 @@ local function ScheduleManabonkCleanup(delay)
 
     retryFrame = retryFrame or CreateFrame("Frame")
     local elapsed = 0
-    retryFrame:SetScript("OnUpdate", function(self, delta)
+    WowNoteProfiler_SetScript(retryFrame, "OnUpdate", "Social.MailCleanupRetry", function(self, delta)
         elapsed = elapsed + (delta or 0)
         if elapsed >= (delay or 0.25) then
-            self:SetScript("OnUpdate", nil)
+            WowNoteProfiler_SetScript(self, "OnUpdate", "Social.MailCleanupRetry", nil)
             cleanupScheduled = false
             if WowNote_ContinueManabonkCleanup then WowNote_ContinueManabonkCleanup() end
         end
@@ -250,7 +255,7 @@ frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
 frame:RegisterEvent("BAG_UPDATE")
 frame:RegisterEvent("BAG_UPDATE_DELAYED")
-frame:SetScript("OnEvent", function(self, event, inviter)
+WowNoteProfiler_SetScript(frame, "OnEvent", "Social.Events", function(self, event, inviter)
     if event == "GUILD_INVITE_REQUEST" and SocialEnabled() and WowNote_IsGuildInviteBlockEnabled and WowNote_IsGuildInviteBlockEnabled() then
         if DeclineGuild then DeclineGuild() end
         if StaticPopup_Hide then StaticPopup_Hide("GUILD_INVITE") end
@@ -280,3 +285,9 @@ frame:SetScript("OnEvent", function(self, event, inviter)
         return
     end
 end)
+
+function WowNote_OpenSocial()
+    if WowNote_OpenSettings then
+        WowNote_OpenSettings()
+    end
+end

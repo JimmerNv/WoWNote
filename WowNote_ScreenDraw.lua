@@ -39,16 +39,21 @@ end
 
 local function SetFront(f)
     if not f then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(f)
+        return
+    end
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(1200)
+    f:SetFrameLevel(100)
     if f.SetToplevel then f:SetToplevel(true) end
+    if f.Raise then f:Raise() end
 end
 
 local function MakeButton(parent, text, width, height)
     local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     b:SetSize(width or 80, height or 22)
     b:SetText(text or "Button")
-    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 50) end
+    if parent and parent.GetFrameLevel then b:SetFrameLevel((parent:GetFrameLevel() or 0) + 5) end
     b:Enable()
     b:EnableMouse(true)
     return b
@@ -95,6 +100,13 @@ local function AddLinePoints(x1, y1, x2, y2, stroke)
     end
 end
 
+local function DrawingOnUpdate(self)
+    if not isDrawing or not currentStroke or not drawMode then return end
+    local x, y = GetCursorOverlayPosition()
+    local dx, dy = x - (lastX or x), y - (lastY or y)
+    if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
+end
+
 local function StartStroke()
     local x, y = GetCursorOverlayPosition()
     currentStroke = { color = currentColorIndex, size = thickness, points = {}, textures = {} }
@@ -102,10 +114,12 @@ local function StartStroke()
     lastX, lastY = x, y
     AddDot(x, y, currentStroke)
     isDrawing = true
+    if overlay then WowNoteProfiler_SetScript(overlay, "OnUpdate", "ScreenDraw.Drawing", DrawingOnUpdate) end
 end
 
 local function StopStroke()
     isDrawing = false
+    if overlay then WowNoteProfiler_SetScript(overlay, "OnUpdate", "ScreenDraw.Drawing", nil) end
     currentStroke = nil
     lastX, lastY = nil, nil
 end
@@ -245,7 +259,8 @@ local function ShowTransfer(mode)
     else
         transferEdit:SetText("")
     end
-    transferFrame:Show(); transferFrame:Raise()
+    transferFrame:Show()
+    SetFront(transferFrame)
 end
 
 local function ShareDrawing()
@@ -258,7 +273,9 @@ local function ShareDrawing()
         local id = tostring(time and time() or GetTime())
         for i = 1, total do
             local chunk = string.sub(text, ((i - 1) * max) + 1, i * max)
-            SendAddonMessage("WowNote", "DRAW:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk, "RAID")
+            local packet = "DRAW:" .. id .. ":" .. i .. ":" .. total .. ":" .. chunk
+            SendAddonMessage("WowNote", packet, "RAID")
+            if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WowNote RAID DRAW", string.len(packet), true) end
         end
         Print("Shared screen drawing to raid (" .. total .. " packets).")
     else
@@ -270,6 +287,7 @@ local incoming = {}
 local function OnAddonMessage(prefix, msg, channel, sender)
     if prefix ~= "WowNote" or type(msg) ~= "string" then return end
     local id, idx, total, chunk = string.match(msg, "^DRAW:([^:]+):(%d+):(%d+):(.+)$")
+    if id and WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", "WowNote " .. tostring(channel or "?") .. " DRAW", string.len(msg), true) end
     if not id then return end
     idx, total = tonumber(idx), tonumber(total)
     if not idx or not total then return end
@@ -290,7 +308,7 @@ local function EnsureReceiver()
     if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix("WowNote") end
     receiveFrame = CreateFrame("Frame")
     receiveFrame:RegisterEvent("CHAT_MSG_ADDON")
-    receiveFrame:SetScript("OnEvent", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
+    WowNoteProfiler_SetScript(receiveFrame, "OnEvent", "ScreenDraw.CommEvents", function(_, _, prefix, msg, channel, sender) OnAddonMessage(prefix, msg, channel, sender) end)
 end
 
 local function CreateUI()
@@ -307,12 +325,6 @@ local function CreateUI()
         if button == "LeftButton" and drawMode then StartStroke() end
     end)
     overlay:SetScript("OnMouseUp", function() StopStroke() end)
-    overlay:SetScript("OnUpdate", function()
-        if not isDrawing or not currentStroke or not drawMode then return end
-        local x, y = GetCursorOverlayPosition()
-        local dx, dy = x - (lastX or x), y - (lastY or y)
-        if (dx * dx + dy * dy) >= 9 then AddLinePoints(lastX, lastY, x, y, currentStroke); lastX, lastY = x, y end
-    end)
 
     frame = CreateFrame("Frame", "WowNoteScreenDrawFrame", UIParent)
     frame:SetSize(430, 220)
@@ -331,7 +343,7 @@ local function CreateUI()
     title:SetText("WowNote Screen Draw")
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
-    close:SetFrameLevel((frame:GetFrameLevel() or 0) + 70)
+    close:SetFrameLevel((frame:GetFrameLevel() or 0) + 10)
     close:EnableMouse(true)
     close:SetScript("OnMouseDown", function() frame:Hide() end)
     close:SetScript("OnClick", function() frame:Hide() end)
@@ -372,7 +384,7 @@ local function CreateUI()
     for i, c in ipairs(colors) do
         local b = CreateFrame("Button", nil, frame)
         b:SetSize(22, 22)
-        b:SetFrameLevel((frame:GetFrameLevel() or 0) + 60)
+        b:SetFrameLevel((frame:GetFrameLevel() or 0) + 5)
         b:SetPoint("TOPLEFT", frame, "TOPLEFT", 14 + ((i - 1) * 27), -96)
         b.tex = b:CreateTexture(nil, "BACKGROUND")
         b.tex:SetAllPoints(b)

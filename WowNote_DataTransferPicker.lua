@@ -46,13 +46,13 @@ end
 
 local function InitDB()
     if WN.InitDB then WN.InitDB() end
-    WowNoteDB = WowNoteDB or {}
-    WowNoteDB.notes = WowNoteDB.notes or {}
-    WowNoteDB.characterNotes = WowNoteDB.characterNotes or {}
-    WowNoteDB.tacticalMaps = WowNoteDB.tacticalMaps or {}
-    WowNoteDB.raidPlannerPresets = WowNoteDB.raidPlannerPresets or {}
-    WowNoteDB.talentPlans = WowNoteDB.talentPlans or {}
-    WowNoteCharDB = WowNoteCharDB or {}
+    if type(WowNoteDB) ~= "table" then WowNoteDB = {} end
+    if type(WowNoteDB.notes) ~= "table" then WowNoteDB.notes = {} end
+    if type(WowNoteDB.characterNotes) ~= "table" then WowNoteDB.characterNotes = {} end
+    if type(WowNoteDB.tacticalMaps) ~= "table" then WowNoteDB.tacticalMaps = {} end
+    if type(WowNoteDB.raidPlannerPresets) ~= "table" then WowNoteDB.raidPlannerPresets = {} end
+    if type(WowNoteDB.talentPlans) ~= "table" then WowNoteDB.talentPlans = {} end
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
 end
 
 local function CountTable(t)
@@ -280,7 +280,7 @@ function WowNote_SaveTransferredDataItem(item, sender)
         return true, "Imported character note: " .. key
     elseif item.type == "tacticalMap" then
         if key == "" then key = item.title or "Imported tactic" end
-        WowNoteDB.tacticalMaps = WowNoteDB.tacticalMaps or {}
+        if type(WowNoteDB.tacticalMaps) ~= "table" then WowNoteDB.tacticalMaps = {} end
         WowNoteDB.tacticalMaps[key] = data
         return true, "Imported tactic: " .. key
     elseif item.type == "raidPlannerPreset" then
@@ -295,7 +295,7 @@ function WowNote_SaveTransferredDataItem(item, sender)
         WowNoteDB.raidIds = data
         return true, "Imported raid ID data."
     elseif item.type == "itemTracker" then
-        WowNoteCharDB = WowNoteCharDB or {}
+        if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
         WowNoteCharDB.itemTracker = data
         return true, "Imported tracker/restock data for this character."
     elseif item.type == "bankSnapshots" then
@@ -313,6 +313,7 @@ local function CreatePicker()
     pickerFrame:SetPoint("CENTER", UIParent, "CENTER", 80, 20)
     pickerFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     pickerFrame:SetToplevel(true)
+    pickerFrame:SetFrameLevel(100)
     pickerFrame:EnableMouse(true)
     pickerFrame:SetMovable(true)
     pickerFrame:RegisterForDrag("LeftButton")
@@ -443,6 +444,7 @@ function WowNote_OpenDataImportExportDialog(mode, initialText, status)
         importFrame:SetPoint("CENTER")
         importFrame:SetFrameStrata("FULLSCREEN_DIALOG")
         importFrame:SetToplevel(true)
+        importFrame:SetFrameLevel(100)
         importFrame:EnableMouse(true)
         importFrame:SetMovable(true)
         importFrame:RegisterForDrag("LeftButton")

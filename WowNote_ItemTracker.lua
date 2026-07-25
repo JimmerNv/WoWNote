@@ -175,25 +175,66 @@ local function AddCursorItem()
 end
 
 local function SaveRow(row)
-    local item = row.item
-    if not item then return end
+    if not row or not row.item then return false end
+    InitDB()
+
+    -- Save must write to the authoritative per-character SavedVariables table,
+    -- not only to the transient row.item reference. Older builds relied on the
+    -- reference staying identical after refresh/sort/migration, which made the
+    -- Restock/Auto checkboxes appear saved in the UI but vanish after relog in
+    -- some load orders.
+    local source = row.item
+    local itemId = tonumber(source.itemId)
+    if not itemId then return false end
+
+    local item = WowNoteCharDB.itemTracker.trackedItems[itemId]
+    if type(item) ~= "table" then
+        -- Do not recreate deleted entries from stale row objects.
+        -- Rows are recycled and can keep their old row.item reference after a
+        -- refresh/remove operation. Recreating here is what made the last
+        -- deleted item come back after pressing Save.
+        row.item = nil
+        return false
+    end
+
+    if source.name and not item.name then item.name = source.name end
+    if source.link and not item.link then item.link = source.link end
+    if source.texture and not item.texture then item.texture = source.texture end
+
+    EnsureItemDefaults(item)
     item.threshold = tonumber(row.threshold:GetText()) or 0
     item.target = tonumber(row.target:GetText()) or item.threshold
+    if item.target < item.threshold then item.target = item.threshold end
+
     item.alert.enabled = row.alertEnabled:GetChecked() and true or false
     item.alert.text = row.textEnabled:GetChecked() and true or false
     item.alert.repeatEnabled = row.repeatEnabled:GetChecked() and true or false
     item.alert.repeatSeconds = tonumber(item.alert.repeatSeconds) or 300
     item.hud.enabled = row.hudEnabled:GetChecked() and true or false
+
     item.restock.enabled = row.restockEnabled:GetChecked() and true or false
     item.restock.autoBuy = row.autoBuy:GetChecked() and true or false
-    if item.target < item.threshold then item.target = item.threshold end
+    item.restock.target = item.target
+    item.restock.savedAt = time and time() or item.restock.savedAt
+    item.savedAt = item.restock.savedAt
+
+    row.item = item
+    return true
 end
 
 local function SaveAllRows()
+    InitDB()
+    local saved = 0
     for i = 1, table.getn(rows) do
-        if rows[i]:IsShown() then SaveRow(rows[i]) end
+        local row = rows[i]
+        -- Only rows currently representing tracked items are saved. Hidden rows
+        -- are stale recycled UI rows and must not be allowed to resurrect items
+        -- that were removed from the authoritative table.
+        if row and row.item and row:IsShown() and SaveRow(row) then saved = saved + 1 end
     end
-    SetStatus("Tracker settings saved.")
+    WowNoteCharDB.itemTracker.savedAt = time and time() or WowNoteCharDB.itemTracker.savedAt
+    WowNoteCharDB.itemTracker.lastExplicitSave = true
+    SetStatus("Tracker/Restock settings saved for " .. tostring(saved) .. " tracked items.")
     WowNote_ItemTracker_Refresh()
     WowNote_ItemTracker_RefreshHud()
     WowNote_ItemTracker_Evaluate(true)
@@ -201,7 +242,7 @@ end
 
 local function SaveChangedRow(row, evaluate)
     if not row or not row.item then return end
-    SaveRow(row)
+    if not SaveRow(row) then return end
     if WowNote_ItemTracker_RefreshHud then WowNote_ItemTracker_RefreshHud() end
     if evaluate and WowNote_ItemTracker_Evaluate then WowNote_ItemTracker_Evaluate(false) end
     if WowNote_Restock_CheckMerchant then WowNote_Restock_CheckMerchant() end
@@ -314,7 +355,20 @@ local function CreateRow(index)
     ForceCharacterMode(row.item)
     row.sound:SetScript("OnClick", function(self) CycleSound(row.item); SaveChangedRow(row, false); WowNote_ItemTracker_Refresh() end)
     row.remove:SetScript("OnClick", function(self)
-        if row.item and row.item.itemId then WowNoteCharDB.itemTracker.trackedItems[row.item.itemId] = nil end
+        InitDB()
+        local itemId = row.item and tonumber(row.item.itemId)
+        if itemId then
+            WowNoteCharDB.itemTracker.trackedItems[itemId] = nil
+            -- Remove from legacy/account backup too so old migration data cannot
+            -- bring this item back if the character table is ever rebuilt.
+            if type(WowNoteDB) == "table" and type(WowNoteDB.itemTracker) == "table" and type(WowNoteDB.itemTracker.trackedItems) == "table" then
+                WowNoteDB.itemTracker.trackedItems[itemId] = nil
+            end
+            row.item = nil
+            WowNoteCharDB.itemTracker.savedAt = time and time() or WowNoteCharDB.itemTracker.savedAt
+            WowNoteCharDB.itemTracker.lastExplicitSave = true
+            SetStatus("Removed tracked item " .. tostring(itemId) .. ".")
+        end
         WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
     end)
     rows[index] = row
@@ -325,7 +379,10 @@ function WowNote_ItemTracker_Refresh()
     if not frame then return end
     InitDB()
     local items = SortedItems()
-    for i = 1, table.getn(rows) do rows[i]:Hide() end
+    for i = 1, table.getn(rows) do
+        rows[i].item = nil
+        rows[i]:Hide()
+    end
     for i = 1, table.getn(items) do
         local item = items[i]
         local row = CreateRow(i)
@@ -478,6 +535,7 @@ local function CreateUI()
     frame = CreateFrame("Frame", "WowNoteItemTrackerFrame", UIParent)
     frame:SetWidth(820); frame:SetHeight(560); frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG"); if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true); frame:SetMovable(true); frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
@@ -533,18 +591,15 @@ local function CreateUI()
 end
 
 function WowNote_OpenItemTracker()
-    InitDB(); CreateUI(); CreateHud(); frame:Show(); if WowNote_Internal and WowNote_Internal.RaiseFrame then WowNote_Internal.RaiseFrame(frame) end; WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
+    InitDB(); CreateUI(); CreateHud(); frame:Show(); if WowNote_Internal and WowNote_Internal.RaiseFrame then WowNote_Internal.RaiseFrame(frame) end
+    if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(true, false) end
+    WowNote_ItemTracker_Refresh(); WowNote_ItemTracker_RefreshHud()
 end
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
-events:RegisterEvent("BAG_UPDATE")
-events:RegisterEvent("BAG_UPDATE_DELAYED")
-events:SetScript("OnEvent", function(self, event)
+WowNoteProfiler_SetScript(events, "OnEvent", "ItemTracker.Events", function(self, event)
     InitDB(); CreateHud()
-    if event == "BAG_UPDATE" or event == "BAG_UPDATE_DELAYED" then
-        if WowNote_ItemSnapshots_ScanNow then WowNote_ItemSnapshots_ScanNow() end
-    end
+    if WowNote_ItemSnapshots_RequestScan then WowNote_ItemSnapshots_RequestScan(false, false) end
     WowNote_ItemTracker_RefreshHud()
-    WowNote_ItemTracker_Evaluate(false)
 end)

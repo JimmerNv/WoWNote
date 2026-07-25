@@ -5,4 +5,14 @@
     <Binding name="WOWNOTE_QUICKADD_NEVER">
         WOWNOTE_QUICKADD_NEVER()
     </Binding>
+    <Binding name="WOWNOTE_QUICKADD_PROTECT">
+        WOWNOTE_QUICKADD_PROTECT()
+    </Binding>
+
+    <Binding name="WOWNOTE_BAG_RESERVE_HOVER" default="R">
+        WOWNOTE_BAG_RESERVE_HOVER()
+    </Binding>
+    <Binding name="WOWNOTE_BAG_CLEAR_HOVER">
+        WOWNOTE_BAG_CLEAR_HOVER()
+    </Binding>
 </Bindings>

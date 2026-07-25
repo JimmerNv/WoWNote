@@ -290,6 +290,10 @@ end
 local function ShouldSellItem(item, settings, forceNames, forceIds, neverNames, neverIds)
     if not item or item.locked then return false end
 
+    if WowNote_IsItemProtected and (WowNote_IsItemProtected(item.link) or WowNote_IsItemProtected(item.id) or WowNote_IsItemProtected(item.name)) then
+        return false, "protected item"
+    end
+
     if MatchesList(item, neverNames, neverIds) then
         return false, "never-sell list"
     end
@@ -324,7 +328,7 @@ local function ScheduleSellSummary(itemCount, estimatedCopper, beforeMoney)
     }
     if not summaryFrame then
         summaryFrame = CreateFrame("Frame")
-        summaryFrame:SetScript("OnUpdate", function(self, elapsed)
+        WowNoteProfiler_SetScript(summaryFrame, "OnUpdate", "AutoVendor.SummaryDelay", function(self, elapsed)
             if not pendingSellSummary then
                 self:Hide()
                 return
@@ -443,7 +447,7 @@ EnsureVendorDB()
 if not eventFrame then
     eventFrame = CreateFrame("Frame")
     eventFrame:RegisterEvent("MERCHANT_SHOW")
-    eventFrame:SetScript("OnEvent", function(self, event)
+    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoVendor.Events", function(self, event)
         if event == "MERCHANT_SHOW" then
             OnMerchantShow()
         end

@@ -1,16 +1,22 @@
 ## Interface: 30300
 ## Title: Titan Panel [|cffeda55fWowNote|r]
-## Notes: Account-wide Markdown notes with GUI, GUIDs, item links, talent planner and raid LFM planner for WoW 3.3.5a
+## Notes: Account-wide notes and raid utilities with native threat meter, PallyBuffs, planners and tracking for WoW 3.3.5a
 ## Author: Johannes / ChatGPT
-## Version: 1.14.41
-## SavedVariables: WowNoteDB, WowNotePostal3DB
-## SavedVariablesPerCharacter: WowNoteCharDB
+## Version: 1.15.58
+## SavedVariables: WowNoteDB, WowNotePostal3DB, WowNoteItemProtectionDB
+## SavedVariablesPerCharacter: WowNoteCharDB, WowNoteItemProtectionCharDB
 ## OptionalDeps: Titan, PallyPower, Ace3
 
 Bindings.xml
+WowNote_Profiler.lua
 WowNote.lua
 WowNote_DataTransferPicker.lua
 WowNote_Settings.lua
+WowNote_ThreatMeter.lua
+WowNote_ThreatHelper.lua
+WowNote_CursorLocalization.lua
+WowNote_Cursor.lua
+WowNote_CursorOptions.lua
 WowNote_Menu.lua
 WowNote_CharacterNotes.lua
 WowNote_Social.lua
@@ -23,9 +29,13 @@ WowNote_PallyPowerCompat.lua
 WowNote_PostalLite.lua
 WowNote_RaidPlanner_Core.lua
 WowNote_RaidPlanner_Roster.lua
+WowNote_RaidPlanner_PortHelper.lua
 WowNote_RaidPlanner_UI.lua
+WowNote_BiteHelper.lua
 WowNote_Minimap.lua
 WowNote_AutoLootRoller.lua
+WowNote_ItemProtection.lua
+WowNote_BagOrganizer.lua
 WowNote_AutoVendor.lua
 WowNote_AutoSellQuickAdd.lua
 WowNote_LootTools.lua

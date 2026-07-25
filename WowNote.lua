@@ -258,7 +258,18 @@ local function MigrateNotesToGuids()
     local changed = false
 
     for key, note in pairs(WowNoteDB.notes) do
-        if type(note) == "table" then
+        if type(note) == "string" then
+            local guid = GenerateGUID()
+            migrated[guid] = {
+                guid = guid,
+                version = WOWNOTE_NOTE_FORMAT_VERSION,
+                title = Trim(tostring(key or "")) ~= "" and tostring(key) or "Untitled",
+                content = note,
+                created = time and time() or 0,
+                updated = time and time() or 0,
+            }
+            changed = true
+        elseif type(note) == "table" then
             local guid = nil
             if IsGuidKey(key) then
                 guid = key
@@ -276,6 +287,8 @@ local function MigrateNotesToGuids()
                 changed = true
             end
             migrated[guid] = note
+        else
+            changed = true
         end
     end
 
@@ -303,7 +316,118 @@ InitDB = function()
     if type(WowNoteDB.raidPlannerPresets) ~= "table" then
         WowNoteDB.raidPlannerPresets = {}
     end
+    if type(WowNoteDB.modules) ~= "table" then WowNoteDB.modules = {} end
+    if type(WowNoteDB.characterNoteOptions) ~= "table" then WowNoteDB.characterNoteOptions = {} end
+    if type(WowNoteDB.social) ~= "table" then WowNoteDB.social = {} end
+    if type(WowNoteDB.minimap) ~= "table" then WowNoteDB.minimap = {} end
+    if type(WowNoteDB.characterNotes) ~= "table" then WowNoteDB.characterNotes = {} end
+    if type(WowNoteDB.tacticalMaps) ~= "table" then WowNoteDB.tacticalMaps = {} end
+    if type(WowNoteDB.pallyCompat) ~= "table" then WowNoteDB.pallyCompat = {} end
+    if type(WowNoteDB.raidIds) ~= "table" then WowNoteDB.raidIds = {} end
+    if type(WowNoteDB.raidPlannerPortHelper) ~= "table" then WowNoteDB.raidPlannerPortHelper = {} end
+    if type(WowNoteDB.inventorySnapshots) ~= "table" then WowNoteDB.inventorySnapshots = {} end
+    if type(WowNoteDB.bankSnapshots) ~= "table" then WowNoteDB.bankSnapshots = {} end
+    if type(WowNoteDB.cursorEffects) ~= "table" then WowNoteDB.cursorEffects = {} end
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.cursorEffects) ~= "table" then WowNoteCharDB.cursorEffects = {} end
+    if type(WowNoteCharDB.windowStates) ~= "table" then WowNoteCharDB.windowStates = {} end
     MigrateNotesToGuids()
+end
+
+--[[
+    Stores movable window geometry per character in normalized screen coordinates.
+
+    The normalized center is independent of UI scale and resolution. The older
+    module-specific point/x/y values remain as migration fallbacks, but all new
+    writes use this shared store so Logout -> Exit Game and /reload follow the
+    same persistence path.
+]]
+local function EnsureWindowStateStore()
+    InitDB()
+    if type(WowNoteCharDB.windowStates) ~= "table" then WowNoteCharDB.windowStates = {} end
+    return WowNoteCharDB.windowStates
+end
+
+local function GetFramePhysicalCenter(frame)
+    if not frame or not UIParent or not frame.GetCenter then return nil, nil end
+    local centerX, centerY = frame:GetCenter()
+    if not centerX or not centerY then return nil, nil end
+    local frameScale = frame.GetEffectiveScale and frame:GetEffectiveScale() or 1
+    return centerX * frameScale, centerY * frameScale
+end
+
+function WowNote_GetWindowState(key)
+    if not key or key == "" then return nil end
+    local store = EnsureWindowStateStore()
+    if type(store[key]) ~= "table" then return nil end
+    return store[key]
+end
+
+function WowNote_GetWindowVisibility(key)
+    local state = WowNote_GetWindowState(key)
+    if not state or state.visible == nil then return nil end
+    return state.visible == true
+end
+
+function WowNote_SetWindowVisibility(key, visible)
+    if not key or key == "" then return end
+    local store = EnsureWindowStateStore()
+    if type(store[key]) ~= "table" then store[key] = {} end
+    store[key].visible = visible and true or false
+    store[key].version = 2
+end
+
+function WowNote_SaveWindowGeometry(key, frame, saveSize)
+    if not key or key == "" or not frame or not UIParent then return false end
+    local physicalX, physicalY = GetFramePhysicalCenter(frame)
+    local parentScale = UIParent.GetEffectiveScale and UIParent:GetEffectiveScale() or 1
+    local parentWidth = UIParent.GetWidth and UIParent:GetWidth() or 0
+    local parentHeight = UIParent.GetHeight and UIParent:GetHeight() or 0
+    local physicalWidth = parentWidth * parentScale
+    local physicalHeight = parentHeight * parentScale
+    if not physicalX or not physicalY or physicalWidth <= 0 or physicalHeight <= 0 then return false end
+
+    local store = EnsureWindowStateStore()
+    if type(store[key]) ~= "table" then store[key] = {} end
+    local state = store[key]
+    state.centerX = physicalX / physicalWidth
+    state.centerY = physicalY / physicalHeight
+    state.version = 2
+    if saveSize then
+        state.width = frame.GetWidth and frame:GetWidth() or state.width
+        state.height = frame.GetHeight and frame:GetHeight() or state.height
+    end
+    return true
+end
+
+function WowNote_RestoreWindowGeometry(key, frame, defaults, restoreSize)
+    if not key or key == "" or not frame or not UIParent then return false end
+    local state = WowNote_GetWindowState(key)
+    if restoreSize and state then
+        local width = tonumber(state.width)
+        local height = tonumber(state.height)
+        if width and width > 0 and frame.SetWidth then frame:SetWidth(width) end
+        if height and height > 0 and frame.SetHeight then frame:SetHeight(height) end
+    end
+
+    frame:ClearAllPoints()
+    if state and tonumber(state.centerX) and tonumber(state.centerY) then
+        local parentScale = UIParent.GetEffectiveScale and UIParent:GetEffectiveScale() or 1
+        local frameScale = frame.GetEffectiveScale and frame:GetEffectiveScale() or parentScale
+        local physicalWidth = (UIParent.GetWidth and UIParent:GetWidth() or 0) * parentScale
+        local physicalHeight = (UIParent.GetHeight and UIParent:GetHeight() or 0) * parentScale
+        if frameScale <= 0 then frameScale = 1 end
+        local offsetX = (tonumber(state.centerX) * physicalWidth) / frameScale
+        local offsetY = (tonumber(state.centerY) * physicalHeight) / frameScale
+        frame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", offsetX, offsetY)
+        return true
+    end
+
+    defaults = type(defaults) == "table" and defaults or {}
+    local point = defaults.point or "CENTER"
+    local relativePoint = defaults.relativePoint or point
+    frame:SetPoint(point, UIParent, relativePoint, tonumber(defaults.x) or 0, tonumber(defaults.y) or 0)
+    return false
 end
 
 local function CountNotes()
@@ -613,15 +737,21 @@ local function MakeButton(parent, text, width, height)
     return button
 end
 
-local wowNoteTopFrameLevel = 100
+local WOW_NOTE_DIALOG_BASE_LEVEL = 100
 local function RaiseFrame(frameToRaise)
     if not frameToRaise then return end
     if frameToRaise.SetFrameStrata then frameToRaise:SetFrameStrata("FULLSCREEN_DIALOG") end
     if frameToRaise.SetToplevel then frameToRaise:SetToplevel(true) end
-    if frameToRaise.SetFrameLevel then
-        wowNoteTopFrameLevel = wowNoteTopFrameLevel + 10
-        frameToRaise:SetFrameLevel(wowNoteTopFrameLevel)
+    if frameToRaise.SetFrameLevel and frameToRaise.GetFrameLevel then
+        local level = tonumber(frameToRaise:GetFrameLevel()) or 0
+        -- Keep normal WowNote windows inside a bounded level range. Very large
+        -- hard-coded levels can block unrelated dialogs and tooltips even after
+        -- another window is brought to the front.
+        if level < 80 or level > 200 then
+            frameToRaise:SetFrameLevel(WOW_NOTE_DIALOG_BASE_LEVEL)
+        end
     end
+    if frameToRaise.Raise then frameToRaise:Raise() end
 end
 
 local function EnableRaiseOnInteraction(frameToRaise)
@@ -806,6 +936,20 @@ local commMaintenanceFrame = nil
 local commDebug = false
 local BuildTransferId
 
+function WowNote_IsCommDebugEnabled()
+    return commDebug == true
+end
+
+function WowNote_SetCommDebugEnabled(enabled)
+    commDebug = enabled == true
+end
+
+function WowNote_CommDebug(message)
+    if commDebug then
+        Print("DEBUG " .. tostring(message or ""))
+    end
+end
+
 local function EscapeChatPayload(payload)
     payload = tostring(payload or "")
     -- Chat channels treat | as an escape introducer for links/colors/textures.
@@ -842,6 +986,7 @@ end
 local function SendAddonWhisper(target, payload)
     if not SendAddonMessage then return false end
     local ok = pcall(SendAddonMessage, COMM_PREFIX, payload, "WHISPER", target)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WNOTE WHISPER", string.len(tostring(payload or "")), ok and true or false) end
     if commDebug then
         Print("DEBUG send WHISPER to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -851,6 +996,7 @@ end
 local function SendAddonChannel(channel, payload)
     if not SendAddonMessage then return false end
     local ok = pcall(SendAddonMessage, COMM_PREFIX, payload, channel)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "WNOTE " .. tostring(channel or "?"), string.len(tostring(payload or "")), ok and true or false) end
     if commDebug then
         Print("DEBUG send " .. tostring(channel or "?") .. ": " .. tostring(payload or ""))
     end
@@ -863,6 +1009,7 @@ local function SendChatWhisper(target, payload)
     if target == "" then return false end
     local text = CHAT_COMM_MARKER .. EscapeChatPayload(payload)
     local ok = pcall(SendChatMessage, text, "WHISPER", nil, target)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "CHAT WHISPER", string.len(text or ""), ok and true or false) end
     if commDebug then
         Print("DEBUG send CHAT-WHISPER to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -918,6 +1065,7 @@ local function SendChatChannel(target, payload)
 
     local text = CHAT_COMM_MARKER .. target .. ":" .. EscapeChatPayload(payload)
     local ok = pcall(SendChatMessage, text, "CHANNEL", nil, number)
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("out", "CHAT CHANNEL", string.len(text or ""), ok and true or false) end
     if commDebug then
         Print("DEBUG send CHANNEL " .. COMM_CHANNEL_NAME .. " #" .. tostring(number or "?") .. " to " .. tostring(target or "?") .. ": " .. tostring(payload or ""))
     end
@@ -1080,27 +1228,52 @@ local function RequestMissingPackets(sender, transfer, reason)
     return true
 end
 
-local function EnsureCommMaintenanceFrame()
-    if commMaintenanceFrame or not CreateFrame then return end
-    commMaintenanceFrame = CreateFrame("Frame")
-    commMaintenanceFrame.elapsed = 0
-    commMaintenanceFrame:SetScript("OnUpdate", function(self, elapsed)
-        self.elapsed = (self.elapsed or 0) + (elapsed or 0)
-        if self.elapsed < 1.0 then return end
-        self.elapsed = 0
+local function HasIncompleteIncomingTransfers()
+    local id, transfer
+    for id, transfer in pairs(incomingTransfers) do
+        if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
+            return true
+        end
+    end
+    return false
+end
 
-        local now = time and time() or 0
-        local id, transfer
-        for id, transfer in pairs(incomingTransfers) do
-            if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
-                local lastPacket = transfer.lastPacketAt or transfer.started or now
-                local lastMissing = transfer.lastMissingRequest or 0
-                if now - lastPacket >= 4 and now - lastMissing >= 4 then
-                    RequestMissingPackets(transfer.sender, transfer, "timeout")
+local function EnsureCommMaintenanceFrame()
+    if not CreateFrame then return end
+    if not commMaintenanceFrame then
+        commMaintenanceFrame = CreateFrame("Frame")
+        commMaintenanceFrame:Hide()
+        commMaintenanceFrame.elapsed = 0
+        WowNoteProfiler_SetScript(commMaintenanceFrame, "OnUpdate", "Core.CommMaintenance", function(self, elapsed)
+            self.elapsed = (self.elapsed or 0) + (elapsed or 0)
+            if self.elapsed < 1.0 then return end
+            self.elapsed = 0
+
+            local now = time and time() or 0
+            local id, transfer
+            local hasIncomplete = false
+            for id, transfer in pairs(incomingTransfers) do
+                if transfer and transfer.total and transfer.count and transfer.count < transfer.total then
+                    hasIncomplete = true
+                    local lastPacket = transfer.lastPacketAt or transfer.started or now
+                    local lastMissing = transfer.lastMissingRequest or 0
+                    if now - lastPacket >= 4 and now - lastMissing >= 4 then
+                        RequestMissingPackets(transfer.sender, transfer, "timeout")
+                    end
                 end
             end
-        end
-    end)
+            if not hasIncomplete then
+                self:Hide()
+            end
+        end)
+    end
+
+    if HasIncompleteIncomingTransfers() then
+        commMaintenanceFrame.elapsed = 0
+        commMaintenanceFrame:Show()
+    else
+        commMaintenanceFrame:Hide()
+    end
 end
 
 local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -1404,7 +1577,7 @@ function WowNote_OpenNoteImportExportDialog(mode, initialText, status)
                 ScrollingEdit_OnCursorChanged(self, x, y, w, h)
             end
         end)
-        WowNoteImportExportEditBox:SetScript("OnUpdate", function(self, elapsed)
+        WowNoteProfiler_SetScript(WowNoteImportExportEditBox, "OnUpdate", "Core.ImportExportEdit", function(self, elapsed)
             if ScrollingEdit_OnUpdate then
                 ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
             end
@@ -2009,6 +2182,9 @@ local function StoreReceivedNote(sender, transfer)
     InitDB()
     local item = DecodeTransferItem(transfer)
     incomingTransfers[transfer.id] = nil
+    if commMaintenanceFrame and not HasIncompleteIncomingTransfers() then
+        commMaintenanceFrame:Hide()
+    end
 
     if type(item) ~= "table" then
         Print("Received WowNote data could not be decoded.")
@@ -2053,6 +2229,7 @@ end
 
 HandleAddonMessage = function(prefix, message, channel, sender)
     if prefix ~= COMM_PREFIX or type(message) ~= "string" then return end
+    if WowNoteProfiler_RecordComm then WowNoteProfiler_RecordComm("in", "WNOTE " .. tostring(channel or "?"), string.len(message), true) end
 
     if commDebug then
         Print("DEBUG recv from " .. tostring(sender or "?") .. " via " .. tostring(channel or "?") .. ": " .. tostring(message or ""))
@@ -2310,6 +2487,7 @@ CreateShareUI = function()
     shareFrame:SetPoint("CENTER", UIParent, "CENTER", 80, 40)
     shareFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if shareFrame.SetToplevel then shareFrame:SetToplevel(true) end
+    shareFrame:SetFrameLevel(100)
     shareFrame:EnableMouse(true)
     shareFrame:SetMovable(true)
     shareFrame:RegisterForDrag("LeftButton")
@@ -2489,6 +2667,8 @@ WowNote_OpenShare = function()
     end
 end
 
+_G.WowNote_OpenShare = WowNote_OpenShare
+
 CreateUI = function()
     if frame then return end
 
@@ -2498,6 +2678,7 @@ CreateUI = function()
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     if frame.SetToplevel then frame:SetToplevel(true) end
+    frame:SetFrameLevel(100)
     frame:EnableMouse(true)
     frame:SetMovable(true)
     frame:RegisterForDrag("LeftButton")
@@ -2516,7 +2697,8 @@ CreateUI = function()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -16)
-    title:SetText("WowNote")
+    local addonVersion = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version")
+    title:SetText(addonVersion and addonVersion ~= "" and ("WowNote v" .. addonVersion) or "WowNote")
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
@@ -2666,7 +2848,14 @@ CreateUI = function()
             ScrollingEdit_OnCursorChanged(self, x, y, w, h)
         end
     end)
-    contentEdit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(contentEdit, "OnUpdate", "Core.NoteEditor", function(self, elapsed)
+        -- Avoid permanent ScrollingEdit work while the note window/editor is not
+        -- actively being edited. This showed up as thousands of tiny calls during
+        -- vendor/bag-sort tests.
+        if not editMode then return end
+        if frame and frame.IsShown and not frame:IsShown() then return end
+        if self.IsVisible and not self:IsVisible() then return end
+        if self.HasFocus and not self:HasFocus() then return end
         if ScrollingEdit_OnUpdate then
             ScrollingEdit_OnUpdate(self, elapsed, self:GetParent())
         end
@@ -2758,15 +2947,54 @@ WowNote_Internal.CompressText = CompressText
 WowNote_Internal.DecompressText = DecompressText
 
 local function WowNote_LoadItemModule()
+local wowNoteChatEditInsertLink = nil
+local modifiedItemHookInstalled = false
+local lastInsertedLink = nil
+local lastInsertedAt = -1
+
+local function TryInsertLinkIntoCurrentNote(text)
+    if not (frame and frame:IsShown() and contentEdit) then
+        return false
+    end
+    if type(text) ~= "string" or text == "" then
+        return false
+    end
+
+    InsertTextIntoEditor(text)
+    lastInsertedLink = text
+    lastInsertedAt = GetTime and GetTime() or 0
+    return true
+end
+
 HookItemLinks = function()
-    if originalChatEditInsertLink or not ChatEdit_InsertLink then return end
-    originalChatEditInsertLink = ChatEdit_InsertLink
-    ChatEdit_InsertLink = function(text)
-        if frame and frame:IsShown() and contentEdit and text then
-            InsertTextIntoEditor(text)
-            return true
+    if ChatEdit_InsertLink and ChatEdit_InsertLink ~= wowNoteChatEditInsertLink then
+        originalChatEditInsertLink = ChatEdit_InsertLink
+        wowNoteChatEditInsertLink = function(text)
+            if TryInsertLinkIntoCurrentNote(text) then
+                return true
+            end
+            if originalChatEditInsertLink then
+                return originalChatEditInsertLink(text)
+            end
+            return false
         end
-        return originalChatEditInsertLink(text)
+        ChatEdit_InsertLink = wowNoteChatEditInsertLink
+    end
+
+    -- Some inventory-style item buttons route modified clicks through
+    -- HandleModifiedItemClick without reaching ChatEdit_InsertLink when no chat
+    -- edit box is active. Use a secure post-hook instead of replacing the global
+    -- function, because replacing it can taint unrelated UI actions.
+    if hooksecurefunc and HandleModifiedItemClick and not modifiedItemHookInstalled then
+        local ok = pcall(hooksecurefunc, "HandleModifiedItemClick", function(link)
+            if not (link and IsModifiedClick and IsModifiedClick("CHATLINK")) then return end
+            local now = GetTime and GetTime() or 0
+            if lastInsertedLink == link and lastInsertedAt >= 0 and (now - lastInsertedAt) < 0.2 then
+                return
+            end
+            TryInsertLinkIntoCurrentNote(link)
+        end)
+        modifiedItemHookInstalled = ok and true or false
     end
 end
 
@@ -3011,6 +3239,7 @@ CreateItemUI = function()
     itemFrame:SetPoint("CENTER", UIParent, "CENTER", 60, -35)
     itemFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if itemFrame.SetToplevel then itemFrame:SetToplevel(true) end
+    itemFrame:SetFrameLevel(100)
     itemFrame:EnableMouse(true)
     itemFrame:SetMovable(true)
     itemFrame:RegisterForDrag("LeftButton")
@@ -3955,6 +4184,7 @@ CreateTalentUI = function()
     talentFrame:SetPoint("CENTER", UIParent, "CENTER", 35, 0)
     talentFrame:SetFrameStrata("FULLSCREEN_DIALOG")
     if talentFrame.SetToplevel then talentFrame:SetToplevel(true) end
+    talentFrame:SetFrameLevel(100)
     talentFrame:EnableMouse(true)
     talentFrame:SetMovable(true)
     talentFrame:RegisterForDrag("LeftButton")
@@ -4053,6 +4283,13 @@ function WowNote_PrintHelp()
     Print("WowNote commands:")
     Print("/wn or /wownote - Toggle the main WowNote window.")
     Print("/wn help - Show this command overview.")
+    Print("/wn profile - Open the WowNote-only performance profiler (disabled by default).")
+    Print("/wn profile on/off - Enable or fully disable WowNote profiling load.")
+    Print("/wn profile report - Print a compact WowNote-only performance summary.")
+    Print("/wn profile timeline - Open selectable total/module/handler history with WowNote attribution.")
+    Print("/wn profile reset - Reset the current profiler session.")
+    Print("/wn profile mark <text> - Add a marker to the profiler timeline.")
+    Print("/wn profile detailed on/off - Toggle per-handler timing.")
     Print("/wn new - Open WowNote and create a new empty note.")
     Print("/wn share - Open the send/receive dialog with receiver-code protected note sharing.")
     Print("/wn talents - Open the talent planner.")
@@ -4063,16 +4300,41 @@ function WowNote_PrintHelp()
     Print("/wn loot roll - Open auto loot roller settings.")
     Print("/wn loot sell - Open auto sell settings.")
     Print("/wn loot repair - Open auto repair settings.")
+    Print("/wn protect - Open Item Protection for items that must never be sold/deleted. Alt+Shift-click a bag item to protect it instantly.")
+    Print("/wn protect add <itemID|name|link> - Add a protected item.")
+    Print("/wn protect sets - Protect items from Equipment Manager sets.")
+    Print("/wn protect save - Force-save Item Protection to all storage mirrors.")
+    Print("/wn protect debug - Show Item Protection storage counters for troubleshooting.")
+    Print("/wn punk - Mark/unmark the current target as Punk in Character Notes.")
+    Print("/wn punkwarn on/off - Toggle warnings when marked Punks join group or raid.")
     Print("/wn draw - Open the screen drawing overlay.")
     Print("/wn tactics - Open the tactical board.")
     Print("/wn bank - Open the account bank snapshot viewer.")
     Print("/wn tracker - Open the item tracker configuration.")
+    Print("/wn bagsort - Sort bags while honoring reserved slots. Protected items move only into matching reserved slots.")
+    Print("/wn bagsort reserved - Sort only reserved/protected slots.")
+    Print("/wn bagsort direction top|bottom|toggle - Choose whether normal sorting fills from top or bottom.")
+    Print("/wn bagreserve hover - Reserve the currently hovered bag slot for its item. Also available as a keybinding, default R.")
+    Print("/wn bagreserve clear - Clear reservation for the currently hovered bag slot.")
+    Print("/wn bagreserve sets - Reserve current bag slots for Equipment Manager set items.")
     Print("/wn tracker lock - Lock the movable tracker HUD.")
     Print("/wn tracker unlock - Unlock the tracker HUD for dragging.")
     Print("/wn tracker show - Show the tracker HUD.")
     Print("/wn tracker hide - Hide the tracker HUD.")
     Print("/wn restock - Open the merchant restock assistant.")
     Print("/wn pallybuffs - Open PallyBuffs assignments.")
+    Print("/wn threat - Show the Threat Meter.")
+    Print("/wn threat show/hide/toggle - Control the Threat Meter window.")
+    Print("/wn threat config - Open the Threat Meter configuration.")
+    Print("/wn threat test on/off - Toggle Threat Meter test data.")
+    Print("/wn threat reset - Reset the current Threat Meter profile.")
+    Print("/wn threathelper show/hide/toggle/config - Control the Threat Helper.")
+    Print("/wn threathelper mt/ot/tank - Assign target roles.")
+    Print("/wn threathelper mute/pause - Mute sounds or soft-disable the helper in combat.")
+    Print("/wn threathelper testaggro/testclear/testdebug - Test helper bars outside an instance.")
+    Print("/wn cursor - Open cursor effect settings.")
+    Print("/wn bite - Open the Blood-Queen Bite Helper.")
+    Print("/wnbite test on/off - Toggle the local Bite Helper test mode.")
     Print("/wn pally sync - Request a PallyBuffs assignment sync.")
     Print("/wn pally test on - Enable the PallyBuffs sample/test mode.")
     Print("/wn pally test off - Disable the PallyBuffs sample/test mode.")
@@ -4105,12 +4367,33 @@ SlashCmdList["WOWNOTE"] = function(msg)
         WowNote_OpenShare()
     elseif lowerMsg == "settings" or lowerMsg == "optionen" or lowerMsg == "options" then
         if WowNote_OpenSettings then WowNote_OpenSettings() else Print("Settings module is not loaded.") end
+    elseif lowerMsg == "profile" or lowerMsg == "profiler" then
+        if WowNote_ProfilerHandleSlash then WowNote_ProfilerHandleSlash("") else Print("Profiler module is not loaded.") end
+    elseif string.sub(lowerMsg, 1, 8) == "profile " or string.sub(lowerMsg, 1, 9) == "profiler " then
+        local arguments = string.match(rawMsg, "^%S+%s+(.+)$") or ""
+        if WowNote_ProfilerHandleSlash then WowNote_ProfilerHandleSlash(arguments) else Print("Profiler module is not loaded.") end
     elseif lowerMsg == "characters" or lowerMsg == "characternotes" or lowerMsg == "playernotes" or lowerMsg == "spielernotizen" then
         if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end
+    elseif lowerMsg == "punk" then
+        if WowNote_CharacterNotesHandleSlash then WowNote_CharacterNotesHandleSlash("punk") else Print("Character Notes module is not loaded.") end
+    elseif lowerMsg == "punkwarn on" or lowerMsg == "punkwarn off" or lowerMsg == "warnpunks on" or lowerMsg == "warnpunks off" then
+        if WowNote_CharacterNotesHandleSlash then WowNote_CharacterNotesHandleSlash(lowerMsg) else Print("Character Notes module is not loaded.") end
     elseif lowerMsg == "talents" or lowerMsg == "talente" or lowerMsg == "talent" then
         WowNote_OpenTalents()
     elseif lowerMsg == "raid" or lowerMsg == "raidplanner" or lowerMsg == "lfm" then
         WowNote_OpenRaidPlanner()
+    elseif lowerMsg == "bite" or lowerMsg == "bitehelper" or lowerMsg == "byte" then
+        if WowNote_OpenBiteHelper then WowNote_OpenBiteHelper(true) else Print("Bite Helper module is not loaded.") end
+    elseif lowerMsg == "threat" or lowerMsg == "threatmeter" or lowerMsg == "omen" then
+        if WowNote_ThreatMeterHandleSlash then WowNote_ThreatMeterHandleSlash("") else Print("Threat Meter module is not loaded.") end
+    elseif string.sub(lowerMsg, 1, 7) == "threat " or string.sub(lowerMsg, 1, 12) == "threatmeter " or string.sub(lowerMsg, 1, 5) == "omen " then
+        local arguments = string.match(rawMsg, "^%S+%s+(.+)$") or ""
+        if WowNote_ThreatMeterHandleSlash then WowNote_ThreatMeterHandleSlash(arguments) else Print("Threat Meter module is not loaded.") end
+    elseif lowerMsg == "threathelper" or lowerMsg == "th" then
+        if WowNote_ThreatHelperHandleSlash then WowNote_ThreatHelperHandleSlash("") else Print("Threat Helper module is not loaded.") end
+    elseif string.sub(lowerMsg, 1, 13) == "threathelper " or string.sub(lowerMsg, 1, 3) == "th " then
+        local arguments = string.match(rawMsg, "^%S+%s+(.+)$") or ""
+        if WowNote_ThreatHelperHandleSlash then WowNote_ThreatHelperHandleSlash(arguments) else Print("Threat Helper module is not loaded.") end
     elseif lowerMsg == "loot" or lowerMsg == "looter" or lowerMsg == "loottools" then
         if WowNote_OpenLootTools then
             WowNote_OpenLootTools("roll")
@@ -4130,6 +4413,22 @@ SlashCmdList["WOWNOTE"] = function(msg)
             WowNote_OpenLootTools("repair")
         else
             Print("Loot Tools module is not loaded.")
+        end
+    elseif lowerMsg == "protect" or lowerMsg == "protection" or lowerMsg == "itemprotect" or lowerMsg == "itemprotection" or lowerMsg == "loot protect" then
+        if WowNote_ItemProtectionHandleSlash then
+            WowNote_ItemProtectionHandleSlash("")
+        else
+            Print("Item Protection module is not loaded.")
+        end
+    elseif string.sub(lowerMsg, 1, 8) == "protect " or string.sub(lowerMsg, 1, 11) == "protection " or string.sub(lowerMsg, 1, 12) == "loot protect" then
+        local arguments = string.match(rawMsg, "^%S+%s+(.+)$") or ""
+        if string.sub(lowerMsg, 1, 12) == "loot protect" then
+            arguments = string.match(rawMsg, "^%S+%s+%S+%s*(.*)$") or ""
+        end
+        if WowNote_ItemProtectionHandleSlash then
+            WowNote_ItemProtectionHandleSlash(arguments)
+        else
+            Print("Item Protection module is not loaded.")
         end
     elseif lowerMsg == "loot roll" or lowerMsg == "lootroller" or lowerMsg == "autoroll" then
         if WowNote_OpenLootTools then
@@ -4185,11 +4484,65 @@ SlashCmdList["WOWNOTE"] = function(msg)
         if WowNote_ItemTracker_SetHudShown then WowNote_ItemTracker_SetHudShown(true) end
     elseif lowerMsg == "tracker hide" or lowerMsg == "track hide" then
         if WowNote_ItemTracker_SetHudShown then WowNote_ItemTracker_SetHudShown(false) end
+    elseif lowerMsg == "bagsort reserved" or lowerMsg == "bag sort reserved" or lowerMsg == "sort reserved slots" or lowerMsg == "sort protected slots" or lowerMsg == "taschen reserviert sortieren" then
+        if WowNote_BagOrganizer_SortReservedSlots then
+            WowNote_BagOrganizer_SortReservedSlots()
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagsort direction bottom" or lowerMsg == "bagsort bottom" or lowerMsg == "bag sort bottom" or lowerMsg == "taschen sortieren unten" then
+        if WowNote_BagOrganizer_SetSortDirection then
+            WowNote_BagOrganizer_SetSortDirection("bottom")
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagsort direction top" or lowerMsg == "bagsort top" or lowerMsg == "bag sort top" or lowerMsg == "taschen sortieren oben" then
+        if WowNote_BagOrganizer_SetSortDirection then
+            WowNote_BagOrganizer_SetSortDirection("top")
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagsort direction toggle" or lowerMsg == "bagsort toggle" or lowerMsg == "bag sort toggle" then
+        if WowNote_BagOrganizer_ToggleSortDirection then
+            WowNote_BagOrganizer_ToggleSortDirection()
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagsort" or lowerMsg == "bag sort" or lowerMsg == "sortbags" or lowerMsg == "sort bags" or lowerMsg == "taschen sortieren" then
+        if WowNote_BagOrganizer_SortBags then
+            WowNote_BagOrganizer_SortBags()
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagreserve hover" or lowerMsg == "bag reserve hover" or lowerMsg == "reserve hovered slot" or lowerMsg == "tasche slot reservieren" then
+        if WowNote_BagOrganizer_ReserveHoveredSlot then
+            WowNote_BagOrganizer_ReserveHoveredSlot(false)
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagreserve clear" or lowerMsg == "bag reserve clear" or lowerMsg == "clear hovered slot" or lowerMsg == "tasche slot freigeben" then
+        if WowNote_BagOrganizer_ReserveHoveredSlot then
+            WowNote_BagOrganizer_ReserveHoveredSlot(true)
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
+    elseif lowerMsg == "bagreserve sets" or lowerMsg == "bag reserve sets" or lowerMsg == "reserve set slots" or lowerMsg == "taschen sets reservieren" then
+        if WowNote_BagOrganizer_ReserveEquipmentSetSlots then
+            WowNote_BagOrganizer_ReserveEquipmentSetSlots()
+        else
+            Print("Bag Organizer module is not loaded.")
+        end
     elseif lowerMsg == "restock" or lowerMsg == "nachkaufen" then
         if WowNote_OpenRestock then
             WowNote_OpenRestock()
         else
             Print("Restock module is not loaded.")
+        end
+    elseif lowerMsg == "cursor" or lowerMsg == "cursoreffects" or lowerMsg == "mousefx" then
+        if WowNote_OpenCursorEffects then
+            WowNote_OpenCursorEffects()
+        else
+            Print("Cursor Effects module is not loaded.")
         end
     elseif lowerMsg == "pally" or lowerMsg == "pallypower" or lowerMsg == "pallybuffs" or lowerMsg == "buffs" or lowerMsg == "blessings" then
         if WowNote_OpenPallyBuffs then
@@ -4280,12 +4633,17 @@ function TitanPanelRightClickMenu_PrepareWowNoteMenu()
     TitanPanelRightClickMenu_AddCommand("New note", TITAN_ID, "WowNote_NewFromTitan")
     TitanPanelRightClickMenu_AddCommand("Talent Planner", TITAN_ID, "WowNote_OpenTalents")
     TitanPanelRightClickMenu_AddCommand("Raid Planner", TITAN_ID, "WowNote_OpenRaidPlanner")
+    TitanPanelRightClickMenu_AddCommand("Bite Helper", TITAN_ID, "WowNote_OpenBiteHelper")
     TitanPanelRightClickMenu_AddCommand("Loot Tools", TITAN_ID, "WowNote_OpenAutoLootRoller")
     TitanPanelRightClickMenu_AddCommand("Raid IDs", TITAN_ID, "WowNote_OpenRaidIdTracker")
     TitanPanelRightClickMenu_AddCommand("Bank Viewer", TITAN_ID, "WowNote_OpenBankViewer")
     TitanPanelRightClickMenu_AddCommand("Item Tracker", TITAN_ID, "WowNote_OpenItemTracker")
+    TitanPanelRightClickMenu_AddCommand("Sort Bags", TITAN_ID, "WowNote_BagOrganizer_SortBags")
+    TitanPanelRightClickMenu_AddCommand("Sort Reserved/Protected Slots", TITAN_ID, "WowNote_BagOrganizer_SortReservedSlots")
     TitanPanelRightClickMenu_AddCommand("Restock", TITAN_ID, "WowNote_OpenRestock")
     TitanPanelRightClickMenu_AddCommand("PallyBuffs", TITAN_ID, "WowNote_OpenPallyBuffs")
+    TitanPanelRightClickMenu_AddCommand("Threat Meter", TITAN_ID, "WowNote_OpenThreatMeter")
+    TitanPanelRightClickMenu_AddCommand("Profiler", TITAN_ID, "WowNote_OpenProfiler")
     TitanPanelRightClickMenu_AddCommand("Help", TITAN_ID, "WowNote_PrintHelp")
     TitanPanelRightClickMenu_AddCommand("Screen Draw", TITAN_ID, "WowNote_OpenScreenDraw")
     TitanPanelRightClickMenu_AddSpacer()
@@ -4304,7 +4662,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = "1.12.0",
+        version = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version") or "1.15.58",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",
@@ -4352,7 +4710,7 @@ eventFrame:RegisterEvent("CHAT_MSG_ADDON")
 eventFrame:RegisterEvent("CHAT_MSG_WHISPER")
 eventFrame:RegisterEvent("CHAT_MSG_CHANNEL")
 eventFrame:RegisterEvent("CHAT_MSG_CHANNEL_NOTICE")
-eventFrame:SetScript("OnEvent", function(self, event, addon, ...)
+WowNoteProfiler_SetScript(eventFrame, "OnEvent", "Core.Events", function(self, event, addon, ...)
     if event == "ADDON_LOADED" and addon == ADDON_NAME then
         InitDB()
         HookItemLinks()
@@ -4361,6 +4719,7 @@ eventFrame:SetScript("OnEvent", function(self, event, addon, ...)
         end
         CreateTitanPlugin()
     elseif event == "PLAYER_LOGIN" then
+        HookItemLinks()
         if RegisterAddonMessagePrefix then
             RegisterAddonMessagePrefix(COMM_PREFIX)
         end

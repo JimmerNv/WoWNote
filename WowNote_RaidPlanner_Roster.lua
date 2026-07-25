@@ -96,6 +96,22 @@ local function FilterRosterRows(rows, groupNames)
     return kept, removed
 end
 
+
+function RP.MarkHaveManualOverride(role)
+    if not role or role == "" then return end
+    RP.manualHaveOverrides = RP.manualHaveOverrides or {}
+    RP.manualHaveOverrides[role] = true
+end
+
+function RP.ClearHaveManualOverride(role)
+    if not role or not RP.manualHaveOverrides then return end
+    RP.manualHaveOverrides[role] = nil
+end
+
+function RP.ClearAllHaveManualOverrides()
+    RP.manualHaveOverrides = {}
+end
+
 function RP.GetRosterData()
     local roster = {}
     for _, role in ipairs(RP.roles or {}) do
@@ -106,6 +122,7 @@ function RP.GetRosterData()
 end
 
 function RP.SetRosterData(roster)
+    if RP.ClearAllHaveManualOverrides then RP.ClearAllHaveManualOverrides() end
     RP.rosterEdits = RP.rosterEdits or {}
     for _, role in ipairs(RP.roles or {}) do
         local edit = RP.rosterEdits[role]
@@ -117,6 +134,7 @@ function RP.SetRosterData(roster)
 end
 
 function RP.ClearRoster()
+    if RP.ClearAllHaveManualOverrides then RP.ClearAllHaveManualOverrides() end
     if not RP.rosterEdits then return end
     for _, role in ipairs(RP.roles or {}) do
         local edit = RP.rosterEdits[role]
@@ -141,7 +159,8 @@ function RP.UpdateHaveFromRoster()
         local rosterText = rosterEdit and rosterEdit:GetText() or ""
         local rows = ParseRosterText(rosterText)
         local shouldAutoCount = RP.forceRosterCount or Trim(rosterText) ~= ""
-        if shouldAutoCount and edit and edit:GetText() ~= tostring(#rows) then
+        local manualOverride = RP.manualHaveOverrides and RP.manualHaveOverrides[role]
+        if shouldAutoCount and (RP.forceRosterCount or not manualOverride) and edit and edit:GetText() ~= tostring(#rows) then
             RP.suppressPreview = true
             edit:SetText(tostring(#rows))
             RP.suppressPreview = false
@@ -163,6 +182,7 @@ function RP.RemoveLeaversFromRoster()
             local rows = ParseRosterText(edit:GetText() or "")
             local kept, removed = FilterRosterRows(rows, groupNames)
             if removed > 0 then
+                if RP.ClearHaveManualOverride then RP.ClearHaveManualOverride(role) end
                 edit:SetText(FormatRosterText(kept))
                 totalRemoved = totalRemoved + removed
             end
@@ -196,7 +216,7 @@ function RP.EnsureRosterEventFrame()
     f:RegisterEvent("RAID_ROSTER_UPDATE")
     f:RegisterEvent("PARTY_MEMBERS_CHANGED")
     f:RegisterEvent("PLAYER_ENTERING_WORLD")
-    f:SetScript("OnEvent", function()
+    WowNoteProfiler_SetScript(f, "OnEvent", "RaidPlanner.RosterEvents", function()
         if RP.frame and RP.frame:IsShown() then
             RP.RemoveLeaversFromRoster()
         end

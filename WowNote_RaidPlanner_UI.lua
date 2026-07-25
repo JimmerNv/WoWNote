@@ -59,7 +59,7 @@ function WowNote_RaidPlanner_MakeLabeledEdit(parent, labelText, x, y, width, def
     return edit
 end
 
-function WowNote_RaidPlanner_MakeNumberRow(parent, labelText, x, y, defaultNeed, defaultHave, helpText)
+function WowNote_RaidPlanner_MakeNumberRow(parent, labelText, x, y, defaultNeed, defaultHave, helpText, role)
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     label:SetText(labelText)
@@ -73,6 +73,7 @@ function WowNote_RaidPlanner_MakeNumberRow(parent, labelText, x, y, defaultNeed,
     local up = MakeButton(parent, "+", 22, 18)
     up:SetPoint("TOPLEFT", parent, "TOPLEFT", x + 204, y)
     up:SetScript("OnClick", function()
+        if role and RP.MarkHaveManualOverride then RP.MarkHaveManualOverride(role) end
         WowNote_RaidPlanner_SetNumber(have, WowNote_RaidPlanner_GetNumber(have) + 1)
         WowNote_RaidPlanner_UpdatePreview()
     end)
@@ -81,9 +82,20 @@ function WowNote_RaidPlanner_MakeNumberRow(parent, labelText, x, y, defaultNeed,
     local down = MakeButton(parent, "-", 22, 18)
     down:SetPoint("TOPLEFT", parent, "TOPLEFT", x + 204, y - 20)
     down:SetScript("OnClick", function()
+        if role and RP.MarkHaveManualOverride then RP.MarkHaveManualOverride(role) end
         WowNote_RaidPlanner_SetNumber(have, WowNote_RaidPlanner_GetNumber(have) - 1)
         WowNote_RaidPlanner_UpdatePreview()
     end)
+    WowNote_RaidPlanner_MakeHelp(parent, down, "Decrease the current Have value by one. Manual changes are kept even when this role already has roster entries.")
+
+    if role then
+        have:SetScript("OnTextChanged", function(self)
+            if not RP.suppressPreview then
+                if RP.MarkHaveManualOverride then RP.MarkHaveManualOverride(role) end
+                WowNote_RaidPlanner_UpdatePreview()
+            end
+        end)
+    end
 
     return need, have
 end
@@ -109,7 +121,7 @@ function WowNote_RaidPlanner_MakeRosterColumn(parent, role, title, x, y, width, 
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     label:SetText(title)
-    WowNote_RaidPlanner_MakeHelp(parent, label, "One player per line. Format: Name, Class. Example: Karlid, Paladin. The Have counter for this role is calculated from this column.")
+    WowNote_RaidPlanner_MakeHelp(parent, label, "One player per line. Format: Name, Class. Example: Karlid, Paladin. The Have counter for this role is calculated from this column. Long lists stay inside this box and can be scrolled.")
 
     local bg = CreateFrame("Frame", nil, parent)
     bg:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 18)
@@ -118,17 +130,60 @@ function WowNote_RaidPlanner_MakeRosterColumn(parent, role, title, x, y, width, 
     bg:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     bg:SetBackdropColor(0, 0, 0, 0.85)
 
-    local edit = MakeEditBox(bg, true)
-    edit:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -4)
-    edit:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -4, 4)
-    edit:SetScript("OnTextChanged", function()
+    local scroll = CreateFrame("ScrollFrame", nil, bg, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -4)
+    scroll:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -26, 4)
+    scroll:EnableMouseWheel(true)
+
+    local edit = MakeEditBox(scroll, true)
+    edit:SetWidth(math.max(40, (width or 170) - 34))
+    edit:SetHeight(math.max(160, (height or 118) * 4))
+    edit:SetScript("OnCursorChanged", function(self, xOffset, yOffset, cursorWidth, cursorHeight)
+        if ScrollingEdit_OnCursorChanged then
+            ScrollingEdit_OnCursorChanged(self, xOffset, yOffset, cursorWidth, cursorHeight)
+        end
+    end)
+    edit:SetScript("OnUpdate", function(self, elapsed)
+        if ScrollingEdit_OnUpdate then
+            ScrollingEdit_OnUpdate(self, elapsed, scroll)
+        end
+    end)
+    edit:SetScript("OnTextChanged", function(self)
+        if ScrollingEdit_OnTextChanged then
+            ScrollingEdit_OnTextChanged(self, scroll)
+        end
         if RP.suppressPreview then return end
+        if RP.ClearHaveManualOverride then RP.ClearHaveManualOverride(role) end
         if RP.UpdateHaveFromRoster then RP.UpdateHaveFromRoster() end
         WowNote_RaidPlanner_UpdatePreview()
     end)
+    edit:SetScript("OnMouseDown", function(self)
+        self:SetFocus()
+    end)
+
+    if scroll.SetScrollChild then
+        scroll:SetScrollChild(edit)
+    end
+
+    bg:SetScript("OnMouseWheel", function(self, delta)
+        if not scroll or not scroll.GetVerticalScroll then return end
+        local current = scroll:GetVerticalScroll() or 0
+        local maxValue = 0
+        if scroll.GetVerticalScrollRange then
+            maxValue = scroll:GetVerticalScrollRange() or 0
+        end
+        local step = 24
+        if delta and delta > 0 then
+            scroll:SetVerticalScroll(math.max(0, current - step))
+        else
+            scroll:SetVerticalScroll(math.min(maxValue or 0, current + step))
+        end
+    end)
 
     RP.rosterEdits = RP.rosterEdits or {}
+    RP.rosterEditScrolls = RP.rosterEditScrolls or {}
     RP.rosterEdits[role] = edit
+    RP.rosterEditScrolls[role] = scroll
     return edit
 end
 
@@ -158,6 +213,39 @@ local function SetDropDownText(dropdown, text)
     if dropdown and dropdown.text then dropdown.text:SetText(text or "") end
 end
 
+local function NormalizeRosterName(name)
+    name = WNI.Trim and WNI.Trim(name or "") or tostring(name or "")
+    name = string.gsub(name, "^%s+", "")
+    name = string.gsub(name, "%s+$", "")
+    name = string.gsub(name, "%-.*$", "")
+    return string.lower(name or "")
+end
+
+local function ParseRosterAssignedNames()
+    local assigned = {}
+    if not RP.rosterEdits then return assigned end
+    for _, role in ipairs(RP.roles or {}) do
+        local edit = RP.rosterEdits[role]
+        local text = edit and edit:GetText() or ""
+        for line in string.gmatch((text or "") .. "\n", "(.-)\n") do
+            line = string.gsub(line or "", "^%s+", "")
+            line = string.gsub(line, "%s+$", "")
+            if line ~= "" then
+                local name = string.match(line, "^([^,;%-]+)[,;%-]") or line
+                name = NormalizeRosterName(name)
+                if name ~= "" then assigned[name] = true end
+            end
+        end
+    end
+    return assigned
+end
+
+local function IsRosterMemberAssigned(name)
+    local key = NormalizeRosterName(name)
+    if key == "" then return false end
+    return ParseRosterAssignedNames()[key] and true or false
+end
+
 local function CreateSimpleDropDown(parent, name, x, y, width, getItems, onSelect, defaultText)
     local dd = CreateFrame("Frame", name, parent, "UIDropDownMenuTemplate")
     dd.text = _G[name .. "Text"]
@@ -180,8 +268,132 @@ local function CreateSimpleDropDown(parent, name, x, y, width, getItems, onSelec
     return dd
 end
 
+
+local function CreateScrollableDropDown(parent, name, x, y, width, getItems, onSelect, defaultText, maxVisible)
+    local itemHeight = 18
+    local visibleRows = maxVisible or 8
+    local dd = CreateFrame("Button", name, parent)
+    dd:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    dd:SetWidth((width or 150) + 24)
+    dd:SetHeight(24)
+    dd:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    dd:SetBackdropColor(0, 0, 0, 0.9)
+    dd:EnableMouse(true)
+
+    dd.text = dd:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dd.text:SetPoint("LEFT", dd, "LEFT", 8, 0)
+    dd.text:SetPoint("RIGHT", dd, "RIGHT", -22, 0)
+    dd.text:SetJustifyH("LEFT")
+    dd.text:SetText(defaultText or "Select")
+
+    local arrow = dd:CreateTexture(nil, "OVERLAY")
+    arrow:SetWidth(16)
+    arrow:SetHeight(16)
+    arrow:SetPoint("RIGHT", dd, "RIGHT", -4, 0)
+    arrow:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Up")
+
+    local popup = CreateFrame("Frame", name .. "Popup", parent)
+    dd.popup = popup
+    popup:SetPoint("TOPLEFT", dd, "BOTTOMLEFT", 0, -2)
+    popup:SetWidth((width or 150) + 34)
+    popup:SetHeight((visibleRows * itemHeight) + 10)
+    popup:SetFrameStrata(parent.GetFrameStrata and parent:GetFrameStrata() or "DIALOG")
+    popup:SetFrameLevel((dd.GetFrameLevel and dd:GetFrameLevel() or 1) + 20)
+    popup:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
+    popup:SetBackdropColor(0, 0, 0, 0.95)
+    popup:EnableMouse(true)
+    popup:Hide()
+
+    local scroll = CreateFrame("ScrollFrame", name .. "ScrollFrame", popup, "FauxScrollFrameTemplate")
+    dd.scrollFrame = scroll
+    scroll:SetPoint("TOPLEFT", popup, "TOPLEFT", 4, -4)
+    scroll:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -26, 4)
+
+    local buttons = {}
+    local function UpdateList()
+        local items = dd.items or {}
+        local offset = FauxScrollFrame_GetOffset and FauxScrollFrame_GetOffset(scroll) or 0
+        if FauxScrollFrame_Update then FauxScrollFrame_Update(scroll, #items, visibleRows, itemHeight) end
+        for i = 1, visibleRows do
+            local button = buttons[i]
+            local item = items[offset + i]
+            if item then
+                button.item = item
+                if button.text then button.text:SetText(item.text or "") end
+                button:Show()
+            else
+                button.item = nil
+                if button.text then button.text:SetText("") end
+                button:Hide()
+            end
+        end
+    end
+    dd.UpdateList = UpdateList
+
+    for i = 1, visibleRows do
+        local row = CreateFrame("Button", name .. "Row" .. i, popup)
+        buttons[i] = row
+        row:SetHeight(itemHeight)
+        row:SetWidth((width or 150) + 4)
+        row:SetPoint("TOPLEFT", popup, "TOPLEFT", 7, -5 - ((i - 1) * itemHeight))
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.text:SetPoint("LEFT", row, "LEFT", 2, 0)
+        row.text:SetPoint("RIGHT", row, "RIGHT", -2, 0)
+        row.text:SetJustifyH("LEFT")
+        row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight", "ADD")
+        row:SetScript("OnClick", function(self)
+            local item = self.item
+            if not item then return end
+            if onSelect then onSelect(item) end
+            SetDropDownText(dd, item.text or defaultText or "Select")
+            popup:Hide()
+        end)
+    end
+
+    scroll:SetScript("OnVerticalScroll", function(self, offset)
+        if FauxScrollFrame_OnVerticalScroll then
+            FauxScrollFrame_OnVerticalScroll(self, offset, itemHeight, UpdateList)
+        end
+    end)
+
+    popup:SetScript("OnMouseWheel", function(self, delta)
+        local bar = _G[name .. "ScrollFrameScrollBar"]
+        if not bar then return end
+        local current = bar:GetValue() or 0
+        local minValue, maxValue = bar:GetMinMaxValues()
+        if delta and delta > 0 then
+            bar:SetValue(math.max(minValue or 0, current - itemHeight * 3))
+        else
+            bar:SetValue(math.min(maxValue or 0, current + itemHeight * 3))
+        end
+        UpdateList()
+    end)
+
+    dd:SetScript("OnClick", function(self)
+        if popup:IsShown() then
+            popup:Hide()
+            return
+        end
+        dd.items = getItems and getItems() or {}
+        if #dd.items == 0 then dd.items = { { text = "No entries", value = nil } } end
+        popup:SetFrameLevel((dd.GetFrameLevel and dd:GetFrameLevel() or 1) + 20)
+        popup:Show()
+        if scroll.SetVerticalScroll then scroll:SetVerticalScroll(0) end
+        local bar = _G[name .. "ScrollFrameScrollBar"]
+        if bar then bar:SetValue(0) end
+        UpdateList()
+    end)
+
+    parent:HookScript("OnHide", function() if popup and popup.Hide then popup:Hide() end end)
+    return dd
+end
+
 local function AppendRosterLine(role, name, className)
     if not role or not name or name == "" or not RP.rosterEdits or not RP.rosterEdits[role] then return false end
+    if IsRosterMemberAssigned(name) then
+        WowNote_RaidPlanner_SetStatus(name .. " is already assigned in the roster.")
+        return false
+    end
     local edit = RP.rosterEdits[role]
     local line = name
     if className and className ~= "" then line = line .. ", " .. className end
@@ -202,16 +414,20 @@ function WowNote_RaidPlanner_CreateRosterDropDowns(parent, x, y)
     RP.selectedRosterMember = nil
     RP.selectedRosterRole = "tanks"
 
-    RP.memberDropDown = CreateSimpleDropDown(parent, "WowNoteRaidPlannerMemberDropDown", x, y - 20, 150, function()
+    RP.memberDropDown = CreateScrollableDropDown(parent, "WowNoteRaidPlannerMemberDropDown", x, y - 20, 140, function()
         local items = {}
+        local assigned = ParseRosterAssignedNames()
         for _, member in ipairs(GetGroupMembers()) do
-            table.insert(items, { text = member.name .. (member.class ~= "" and (" (" .. member.class .. ")") or ""), value = member })
+            local key = NormalizeRosterName(member.name)
+            if key ~= "" and not assigned[key] then
+                table.insert(items, { text = member.name .. (member.class ~= "" and (" (" .. member.class .. ")") or ""), value = member })
+            end
         end
-        if #items == 0 then table.insert(items, { text = "No group members", value = nil }) end
+        if #items == 0 then table.insert(items, { text = "No unassigned group members", value = nil }) end
         return items
     end, function(item)
         RP.selectedRosterMember = item and item.value or nil
-    end, "Member")
+    end, "Member", 8)
 
     RP.roleDropDown = CreateSimpleDropDown(parent, "WowNoteRaidPlannerRoleDropDown", x + 170, y - 20, 90, function()
         return {
@@ -235,6 +451,8 @@ function WowNote_RaidPlanner_CreateRosterDropDowns(parent, x, y)
         end
         if AppendRosterLine(RP.selectedRosterRole or "tanks", m.name, m.class) then
             WowNote_RaidPlanner_SetStatus("Added " .. m.name .. " to roster.")
+            RP.selectedRosterMember = nil
+            SetDropDownText(RP.memberDropDown, "Member")
         end
     end)
     WowNote_RaidPlanner_MakeHelp(parent, addButton, "Adds the selected member to the selected role column.")
@@ -249,6 +467,7 @@ function WowNote_RaidPlanner_ShowTransferFrame(mode)
         f:SetPoint("CENTER")
         f:SetFrameStrata("FULLSCREEN_DIALOG")
         if f.SetToplevel then f:SetToplevel(true) end
+        f:SetFrameLevel(100)
         f:EnableMouse(true)
         f:SetMovable(true)
         f:RegisterForDrag("LeftButton")
@@ -459,6 +678,7 @@ function WowNote_CreateRaidPlannerUI()
     f:SetPoint("CENTER")
     f:SetFrameStrata("FULLSCREEN_DIALOG")
     if f.SetToplevel then f:SetToplevel(true) end
+    f:SetFrameLevel(100)
     f:EnableMouse(true)
     f:SetMovable(true)
     f:RegisterForDrag("LeftButton")
@@ -475,6 +695,13 @@ function WowNote_CreateRaidPlannerUI()
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
 
+    local portHelperButton = MakeButton(f, "Port Helper", 100, 22)
+    portHelperButton:SetPoint("TOPRIGHT", f, "TOPRIGHT", -42, -14)
+    portHelperButton:SetScript("OnClick", function()
+        if RP.ShowPortHelper then RP.ShowPortHelper() end
+    end)
+    WowNote_RaidPlanner_MakeHelp(f, portHelperButton, "Opens the summon request helper. Post a reply code, collect matching chat replies, and click a player button to target them for summoning.")
+
     RP.sizeEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Raid Size", 24, -52, 70, "10", false, 24, "Choose 10, 25, or enter any custom size/text you want to show in the message.")
     local size10 = MakeButton(f, "10", 38, 22)
     size10:SetPoint("TOPLEFT", f, "TOPLEFT", 102, -70)
@@ -487,15 +714,15 @@ function WowNote_CreateRaidPlannerUI()
     custom:SetScript("OnClick", function() RP.sizeEdit:SetFocus(); RP.sizeEdit:HighlightText() end)
 
     RP.raidNameEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Raid Name", 300, -52, 220, "", false, 24, "The raid or activity name. Used by the %name placeholder.")
-    RP.channelEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Post Channel", 545, -52, 80, "/2", false, 24, "Where to post the message. Examples: /2, /5, /y, /s, /g, /p, /raid.")
+    RP.channelEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Post Channels", 545, -52, 95, "/2", false, 24, "One or more post channels. Separate multiple targets with spaces, commas, semicolons, plus signs, or vertical bars. Example: /2, /5, /y.")
     RP.contactEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Contact", 648, -52, 150, "/w me", false, 24, "Free contact text inserted by the %contact placeholder. Example: /w Stiffbeard.")
     RP.autoRemoveCheck = MakeCheckButton(f, "Auto-remove leavers", 815, -68, true, "When group or raid roster changes, assigned players who are no longer in your group are removed from the roster table automatically.")
 
-    RP.tankNeedEdit, RP.tankHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "Tanks", 34, -125, 2, 0, "Tank slots. Have is counted from the Tanks roster column.")
-    RP.healNeedEdit, RP.healHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "Healers", 34, -168, 3, 0, "Healer slots. Have is counted from the Healers roster column.")
-    RP.dpsNeedEdit, RP.dpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "DPS", 34, -211, 5, 0, "General DPS slots. Used when no mDPS or rDPS need values are set.")
-    RP.mdpsNeedEdit, RP.mdpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "mDPS", 360, -125, 0, 0, "Optional melee DPS slots. If mDPS or rDPS need values are set, %dps is built from those split values automatically.")
-    RP.rdpsNeedEdit, RP.rdpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "rDPS", 360, -168, 0, 0, "Optional ranged DPS slots. If mDPS or rDPS need values are set, %dps is built from those split values automatically.")
+    RP.tankNeedEdit, RP.tankHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "Tanks", 34, -125, 2, 0, "Tank slots. Have is counted from the Tanks roster column.", "tanks")
+    RP.healNeedEdit, RP.healHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "Healers", 34, -168, 3, 0, "Healer slots. Have is counted from the Healers roster column.", "healers")
+    RP.dpsNeedEdit, RP.dpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "DPS", 34, -211, 5, 0, "General DPS slots. Used when no mDPS or rDPS need values are set.", "dps")
+    RP.mdpsNeedEdit, RP.mdpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "mDPS", 360, -125, 0, 0, "Optional melee DPS slots. If mDPS or rDPS need values are set, %dps is built from those split values automatically.", "mdps")
+    RP.rdpsNeedEdit, RP.rdpsHaveEdit = WowNote_RaidPlanner_MakeNumberRow(f, "rDPS", 360, -168, 0, 0, "Optional ranged DPS slots. If mDPS or rDPS need values are set, %dps is built from those split values automatically.", "rdps")
 
     local splitLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     splitLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 360, -220)
@@ -541,6 +768,7 @@ function WowNote_CreateRaidPlannerUI()
     previewButton:SetPoint("TOPLEFT", f, "TOPLEFT", 220, -651)
     previewButton:SetScript("OnClick", function() WowNote_RaidPlanner_UpdatePreview() end)
     local postButton = MakeButton(f, "Post", 72, 24)
+    RP.postButton = postButton
     postButton:SetPoint("LEFT", previewButton, "RIGHT", 8, 0)
     postButton:SetScript("OnClick", WowNote_RaidPlanner_Post)
     local saveButton = MakeButton(f, "Save/Update", 100, 24)
@@ -572,6 +800,11 @@ function WowNote_CreateRaidPlannerUI()
 
     f:SetScript("OnShow", function()
         if InitDB then InitDB() end
+        if RP.postButton then
+            if RP.postButton.Enable then RP.postButton:Enable() end
+            if RP.postButton.EnableMouse then RP.postButton:EnableMouse(true) end
+            if RP.postButton.SetAlpha then RP.postButton:SetAlpha(1) end
+        end
         if RP.RemoveLeaversFromRoster then RP.RemoveLeaversFromRoster() end
         WowNote_RaidPlanner_UpdatePreview()
         if WowNote_RaidPlanner_RefreshPresetList then WowNote_RaidPlanner_RefreshPresetList(RP.selectedPresetName) end

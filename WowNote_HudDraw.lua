@@ -11,6 +11,8 @@ local activeDrawing = nil
 local renderTextures = {}
 local hudScale = 42000
 local visible = false
+local hudElapsed = 0
+local HUD_UPDATE_INTERVAL = 0.10
 
 local colors = {
     { r = 1.00, g = 0.90, b = 0.00 },
@@ -41,19 +43,25 @@ end
 
 local function SetFront(f)
     if not f then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(f)
+        return
+    end
     f:SetFrameStrata("FULLSCREEN_DIALOG")
-    f:SetFrameLevel(910)
+    f:SetFrameLevel(100)
+    if f.SetToplevel then f:SetToplevel(true) end
+    if f.Raise then f:Raise() end
 end
 
 local function EnsureDB()
-    WowNoteCharDB = WowNoteCharDB or {}
-    WowNoteCharDB.hudDraw = WowNoteCharDB.hudDraw or {}
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.hudDraw) ~= "table" then WowNoteCharDB.hudDraw = {} end
     hudScale = tonumber(WowNoteCharDB.hudDraw.scale) or hudScale
 end
 
 local function SaveDB()
-    WowNoteCharDB = WowNoteCharDB or {}
-    WowNoteCharDB.hudDraw = WowNoteCharDB.hudDraw or {}
+    if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
+    if type(WowNoteCharDB.hudDraw) ~= "table" then WowNoteCharDB.hudDraw = {} end
     WowNoteCharDB.hudDraw.scale = hudScale
 end
 
@@ -72,17 +80,20 @@ local function HideAllTextures(fromIndex)
 end
 
 local function GetPlayerMapXY()
-    if SetMapToCurrentZone then pcall(SetMapToCurrentZone) end
     if not GetPlayerMapPosition then return nil, nil end
     local x, y = GetPlayerMapPosition("player")
+    if (not x or not y or (x == 0 and y == 0)) and SetMapToCurrentZone then
+        pcall(SetMapToCurrentZone)
+        x, y = GetPlayerMapPosition("player")
+    end
     if not x or not y or (x == 0 and y == 0) then return nil, nil end
     local map = GetMapInfo and GetMapInfo() or nil
     local floor = GetCurrentMapDungeonLevel and GetCurrentMapDungeonLevel() or 0
     return x, y, map, floor
 end
 
-local function ProjectPoint(px, py, pointX, pointY)
-    local facing = GetPlayerFacing and GetPlayerFacing() or 0
+local function ProjectPoint(px, py, pointX, pointY, facing)
+    facing = facing or 0
     local dx = (pointX or 0) - px
     local dy = (pointY or 0) - py
     local dist = math.sqrt(dx * dx + dy * dy) * hudScale
@@ -110,13 +121,14 @@ local function RenderHUD()
     local index = 1
     local centerX, centerY = 0, 0
     local visiblePoints = 0
+    local facing = GetPlayerFacing and GetPlayerFacing() or 0
     for _, stroke in ipairs(activeDrawing.strokes or {}) do
         local c = colors[stroke.color or 1] or colors[1]
         local size = math.max(3, math.min(18, tonumber(stroke.size) or 5))
         for _, p in ipairs(stroke.points or {}) do
             local mx, my = tonumber(p.x), tonumber(p.y)
             if mx and my and mx >= 0 and mx <= 1 and my >= 0 and my <= 1 then
-                local sx, sy = ProjectPoint(px, py, mx, my)
+                local sx, sy = ProjectPoint(px, py, mx, my, facing)
                 if math.abs(sx) < 1200 and math.abs(sy) < 900 then
                     local tex = AcquireTexture(index)
                     tex:SetWidth(size)
@@ -139,6 +151,28 @@ local function RenderHUD()
     if scaleSlider and scaleSlider:GetValue() ~= hudScale then scaleSlider:SetValue(hudScale) end
 end
 
+local function HudOnUpdate(self, elapsed)
+    if not visible or not activeDrawing or not self:IsShown() then return end
+    hudElapsed = hudElapsed + (elapsed or 0)
+    if hudElapsed < HUD_UPDATE_INTERVAL then return end
+    hudElapsed = 0
+    RenderHUD()
+end
+
+local function SetHudActive(active)
+    visible = active and activeDrawing ~= nil
+    hudElapsed = 0
+    if not hudFrame then return end
+    if visible then
+        hudFrame:Show()
+        WowNoteProfiler_SetScript(hudFrame, "OnUpdate", "TacticalHUD.Render", HudOnUpdate)
+    else
+        WowNoteProfiler_SetScript(hudFrame, "OnUpdate", "TacticalHUD.Render", nil)
+        hudFrame:Hide()
+        HideAllTextures(1)
+    end
+end
+
 local function CreateUI()
     if hudFrame then return end
     EnsureDB()
@@ -146,9 +180,9 @@ local function CreateUI()
     hudFrame = CreateFrame("Frame", "WowNoteHudDrawOverlay", UIParent)
     hudFrame:SetAllPoints(UIParent)
     hudFrame:SetFrameStrata("FULLSCREEN")
-    hudFrame:SetFrameLevel(830)
+    hudFrame:SetFrameLevel(20)
     hudFrame:EnableMouse(false)
-    hudFrame:SetScript("OnUpdate", RenderHUD)
+    hudFrame:Hide()
 
     controlFrame = CreateFrame("Frame", "WowNoteHudDrawControl", UIParent)
     controlFrame:SetSize(430, 90)
@@ -167,10 +201,9 @@ local function CreateUI()
     title:SetText("WowNote Tactical HUD")
     local close = CreateFrame("Button", nil, controlFrame, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", -4, -4)
-    -- Keep the close button above the HUD control frame background. The HUD
-    -- overlay uses very high frame levels, so the template close button must be
-    -- lifted explicitly or it can appear disabled / stop receiving clicks.
-    close:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 80)
+    -- Keep the close button slightly above the HUD control frame background
+    -- without forcing the whole window above unrelated dialogs.
+    close:SetFrameLevel((controlFrame:GetFrameLevel() or 0) + 10)
     close:EnableMouse(true)
     close:Enable()
     close:SetScript("OnMouseDown", function() controlFrame:Hide() end)
@@ -179,7 +212,7 @@ local function CreateUI()
 
     local clearBtn = MakeButton(controlFrame, "Clear HUD", 76, 22)
     clearBtn:SetPoint("TOPLEFT", 12, -34)
-    clearBtn:SetScript("OnClick", function() activeDrawing = nil; visible = false; HideAllTextures(1); Print("HUD drawing cleared.") end)
+    clearBtn:SetScript("OnClick", function() activeDrawing = nil; SetHudActive(false); Print("HUD drawing cleared.") end)
 
     local scaleLabel = controlFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     scaleLabel:SetPoint("LEFT", clearBtn, "RIGHT", 10, 0)
@@ -231,8 +264,7 @@ function WowNote_HudDraw_ShowDrawing(drawing)
         return
     end
     activeDrawing = drawing
-    visible = true
-    hudFrame:Show()
+    SetHudActive(true)
     controlFrame:Show()
     SetFront(controlFrame)
     controlFrame:Raise()
@@ -243,8 +275,7 @@ end
 function WowNote_HudDraw_Clear()
     if not hudFrame then return end
     activeDrawing = nil
-    visible = false
-    HideAllTextures(1)
+    SetHudActive(false)
 end
 
 Print("Tactical HUD loaded.")

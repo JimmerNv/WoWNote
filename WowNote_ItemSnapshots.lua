@@ -14,6 +14,19 @@ local pendingBankScan = false
 local scheduler = CreateFrame("Frame")
 scheduler:Hide()
 scheduler.elapsed = 0
+local INVENTORY_SCAN_INTERVAL = 15
+local BAG_CHANGE_DEBOUNCE = 1.00
+local BANK_CHANGE_DEBOUNCE = 1.00
+local lastBagScanAt = -INVENTORY_SCAN_INTERVAL
+local lastBankScanAt = -INVENTORY_SCAN_INTERVAL
+local bagScanDueAt = nil
+local bankScanDueAt = nil
+
+local function Now()
+    if GetTime then return GetTime() end
+    if time then return time() end
+    return 0
+end
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then
@@ -102,17 +115,35 @@ local function ScanContainerInto(snapshot, bag)
     snapshot.containers[bag] = container
 end
 
+local function RebuildSnapshotCounts(snapshot)
+    local counts = {}
+    if type(snapshot) == "table" and type(snapshot.containers) == "table" then
+        for _, container in pairs(snapshot.containers) do
+            if type(container) == "table" and type(container.slots) == "table" then
+                for _, item in pairs(container.slots) do
+                    if type(item) == "table" and item.itemId then
+                        local itemId = tonumber(item.itemId)
+                        if itemId then counts[itemId] = (counts[itemId] or 0) + (tonumber(item.count) or 1) end
+                    end
+                end
+            end
+        end
+    end
+    snapshot.counts = counts
+end
+
 local function ScanInventoryNow()
     local snapshot = EnsureCharacterSnapshot(WowNoteDB.inventorySnapshots)
     for bag = BAG_MIN, BAG_MAX do
         ScanContainerInto(snapshot, bag)
     end
+    RebuildSnapshotCounts(snapshot)
     snapshot.updatedAt = time and time() or 0
+    lastBagScanAt = Now()
 
     if WowNote_ItemTracker_Evaluate then
         WowNote_ItemTracker_Evaluate(false)
-    end
-    if WowNote_ItemTracker_RefreshHud then
+    elseif WowNote_ItemTracker_RefreshHud then
         WowNote_ItemTracker_RefreshHud()
     end
 end
@@ -124,67 +155,89 @@ local function ScanBankNow()
     for bag = BANK_BAG_MIN, BANK_BAG_MAX do
         ScanContainerInto(snapshot, bag)
     end
+    RebuildSnapshotCounts(snapshot)
     snapshot.updatedAt = time and time() or 0
+    lastBankScanAt = Now()
 
     if WowNote_BankViewer_Refresh then
         WowNote_BankViewer_Refresh()
     end
     if WowNote_ItemTracker_Evaluate then
         WowNote_ItemTracker_Evaluate(false)
-    end
-    if WowNote_ItemTracker_RefreshHud then
+    elseif WowNote_ItemTracker_RefreshHud then
         WowNote_ItemTracker_RefreshHud()
     end
 end
 
-local function Schedule(kind)
-    if kind == "bank" then pendingBankScan = true else pendingBagScan = true end
-    scheduler.elapsed = 0
+local function Schedule(kind, immediate)
+    local now = Now()
+    if kind == "bank" then
+        pendingBankScan = true
+        -- Coalesce sort/vendor spam quickly. The old 15s minimum kept the
+        -- scheduler OnUpdate alive for too long after every bag change.
+        bankScanDueAt = immediate and now or (now + BANK_CHANGE_DEBOUNCE)
+    else
+        pendingBagScan = true
+        bagScanDueAt = immediate and now or (now + BAG_CHANGE_DEBOUNCE)
+    end
     scheduler:Show()
 end
 
-scheduler:SetScript("OnUpdate", function(self, elapsed)
+WowNoteProfiler_SetScript(scheduler, "OnUpdate", "ItemSnapshots.Scheduler", function(self, elapsed)
     self.elapsed = (self.elapsed or 0) + (elapsed or 0)
-    if self.elapsed < 0.25 then return end
-    self:Hide()
-    if pendingBagScan then
+    if self.elapsed < 0.50 then return end
+    self.elapsed = 0
+    local now = Now()
+    if pendingBagScan and bagScanDueAt and now >= bagScanDueAt then
         pendingBagScan = false
+        bagScanDueAt = nil
         ScanInventoryNow()
     end
-    if pendingBankScan then
+    if pendingBankScan and bankScanDueAt and now >= bankScanDueAt then
         pendingBankScan = false
+        bankScanDueAt = nil
         ScanBankNow()
     end
+    if not pendingBagScan and not pendingBankScan then self:Hide() end
 end)
 
 local events = CreateFrame("Frame")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("BAG_UPDATE")
+events:RegisterEvent("BAG_UPDATE_DELAYED")
 events:RegisterEvent("BANKFRAME_OPENED")
 events:RegisterEvent("BANKFRAME_CLOSED")
 events:RegisterEvent("PLAYERBANKSLOTS_CHANGED")
 events:RegisterEvent("PLAYERBANKBAGSLOTS_CHANGED")
-events:SetScript("OnEvent", function(self, event, arg1)
+WowNoteProfiler_SetScript(events, "OnEvent", "ItemSnapshots.Events", function(self, event, arg1)
     InitDB()
     if event == "PLAYER_LOGIN" then
-        Schedule("bags")
+        Schedule("bags", true)
     elseif event == "BAG_UPDATE" then
+        -- Slot-level BAG_UPDATE can fire dozens/hundreds of times while ElvUI
+        -- sorts bags. Keep this as a fallback only; the delayed event below is
+        -- the real coalesced scan trigger.
         local bag = tonumber(arg1)
         if not bag or (bag >= BAG_MIN and bag <= BAG_MAX) then
-            Schedule("bags")
+            Schedule("bags", false)
         end
         if isBankOpen and (not bag or bag == BANK_ID or (bag >= BANK_BAG_MIN and bag <= BANK_BAG_MAX)) then
-            Schedule("bank")
+            Schedule("bank", false)
         end
+    elseif event == "BAG_UPDATE_DELAYED" then
+        Schedule("bags", false)
+        if isBankOpen then Schedule("bank", false) end
     elseif event == "BANKFRAME_OPENED" then
         isBankOpen = true
-        Schedule("bags")
-        Schedule("bank")
+        Schedule("bags", true)
+        Schedule("bank", true)
     elseif event == "BANKFRAME_CLOSED" then
+        pendingBankScan = false
+        bankScanDueAt = nil
         ScanBankNow()
         isBankOpen = false
     elseif event == "PLAYERBANKSLOTS_CHANGED" or event == "PLAYERBANKBAGSLOTS_CHANGED" then
-        if isBankOpen then Schedule("bank") end
+        if isBankOpen then Schedule("bank", false) end
     end
 end)
 
@@ -201,38 +254,44 @@ local function AddCountsFromSnapshot(counts, snapshot)
     end
 end
 
+local function CountItemInSnapshot(snapshot, itemId)
+    if type(snapshot) ~= "table" then return 0 end
+    if type(snapshot.counts) ~= "table" then RebuildSnapshotCounts(snapshot) end
+    return tonumber(snapshot.counts[itemId] or 0) or 0
+end
+
 function WowNote_ItemSnapshots_GetCurrentCharacterCount(itemId, includeBank)
     InitDB()
     itemId = tonumber(itemId)
     if not itemId then return 0 end
     local realm = RealmName()
     local char = CharacterName()
-    local counts = {}
+    local total = 0
     if WowNoteDB.inventorySnapshots[realm] then
-        AddCountsFromSnapshot(counts, WowNoteDB.inventorySnapshots[realm][char])
+        total = total + CountItemInSnapshot(WowNoteDB.inventorySnapshots[realm][char], itemId)
     end
     if includeBank and WowNoteDB.bankSnapshots[realm] then
-        AddCountsFromSnapshot(counts, WowNoteDB.bankSnapshots[realm][char])
+        total = total + CountItemInSnapshot(WowNoteDB.bankSnapshots[realm][char], itemId)
     end
-    return counts[itemId] or 0
+    return total
 end
 
 function WowNote_ItemSnapshots_GetAccountCount(itemId)
     InitDB()
     itemId = tonumber(itemId)
     if not itemId then return 0 end
-    local counts = {}
+    local total = 0
     for _, chars in pairs(WowNoteDB.inventorySnapshots) do
         if type(chars) == "table" then
-            for _, snapshot in pairs(chars) do AddCountsFromSnapshot(counts, snapshot) end
+            for _, snapshot in pairs(chars) do total = total + CountItemInSnapshot(snapshot, itemId) end
         end
     end
     for _, chars in pairs(WowNoteDB.bankSnapshots) do
         if type(chars) == "table" then
-            for _, snapshot in pairs(chars) do AddCountsFromSnapshot(counts, snapshot) end
+            for _, snapshot in pairs(chars) do total = total + CountItemInSnapshot(snapshot, itemId) end
         end
     end
-    return counts[itemId] or 0
+    return total
 end
 
 function WowNote_ItemSnapshots_CountTracked(itemId, mode)
@@ -243,8 +302,22 @@ function WowNote_ItemSnapshots_CountTracked(itemId, mode)
 end
 
 function WowNote_ItemSnapshots_ScanNow()
+    pendingBagScan = false
+    pendingBankScan = false
+    bagScanDueAt = nil
+    bankScanDueAt = nil
+    scheduler:Hide()
     ScanInventoryNow()
     if isBankOpen then ScanBankNow() end
+end
+
+function WowNote_ItemSnapshots_RequestScan(immediate, includeBank)
+    Schedule("bags", immediate == true)
+    if includeBank and isBankOpen then Schedule("bank", immediate == true) end
+end
+
+function WowNote_ItemSnapshots_GetScanInterval()
+    return INVENTORY_SCAN_INTERVAL
 end
 
 function WowNote_ItemSnapshots_IsBankOpen()

@@ -8,9 +8,59 @@ local openAllIdleCycles = 0
 local openAllSafetyCycles = 0
 local openAllLooted = 0
 local openAllDeleted = 0
+local openAllStartMoney = nil
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg)) end
+end
+
+local function FormatMoneyAmount(copper)
+    copper = tonumber(copper) or 0
+    if copper < 0 then copper = 0 end
+    copper = math.floor(copper + 0.5)
+
+    local gold = math.floor(copper / 10000)
+    local silver = math.floor((copper - (gold * 10000)) / 100)
+    local cop = copper - (gold * 10000) - (silver * 100)
+
+    if gold > 0 then
+        return string.format("%dg %02ds %02dc", gold, silver, cop)
+    end
+    if silver > 0 then
+        return string.format("%ds %02dc", silver, cop)
+    end
+    return string.format("%dc", cop)
+end
+
+local function GetOpenAllGoldGained()
+    if not GetMoney or not openAllStartMoney then return nil end
+    local current = tonumber(GetMoney()) or 0
+    local gained = current - (tonumber(openAllStartMoney) or current)
+    if gained < 0 then gained = 0 end
+    return gained
+end
+
+local function BuildOpenAllSummary(prefix)
+    local msg = (prefix or "Open All done.") .. " Looted: " .. tostring(openAllLooted) .. ", deleted empty: " .. tostring(openAllDeleted) .. "."
+    local gained = GetOpenAllGoldGained()
+    if gained then
+        msg = msg .. " Gold earned: " .. FormatMoneyAmount(gained) .. "."
+    end
+    return msg
+end
+
+local function GetOpenAllInterval()
+    if WowNote_GetPostalOpenInterval then return WowNote_GetPostalOpenInterval() end
+    if type(WowNoteDB) == "table" and type(WowNoteDB.postalLite) == "table" then
+        local value = tostring(WowNoteDB.postalLite.openAllInterval or "")
+        value = string.gsub(value, ",", ".")
+        local number = tonumber(value)
+        if number and number > 0 then
+            if number < 0.05 then return 0.05 end
+            return number
+        end
+    end
+    return 0.50
 end
 
 local function MailVisible()
@@ -85,9 +135,9 @@ local function StopWorker(doneMessage)
     openAllActive = false
     openAllIdleCycles = 0
     openAllSafetyCycles = 0
-    if workerFrame then workerFrame:SetScript("OnUpdate", nil) end
+    if workerFrame then WowNoteProfiler_SetScript(workerFrame, "OnUpdate", "Postal.OpenAllWorker", nil) end
     if doneMessage then
-        Print("Open All done. Looted: " .. tostring(openAllLooted) .. ", deleted empty: " .. tostring(openAllDeleted) .. ".")
+        Print(BuildOpenAllSummary("Open All done."))
     end
 end
 
@@ -173,11 +223,13 @@ local function StartWorker()
     openAllSafetyCycles = 0
     openAllLooted = 0
     openAllDeleted = 0
+    openAllStartMoney = GetMoney and (tonumber(GetMoney()) or 0) or nil
     workerFrame = workerFrame or CreateFrame("Frame")
     local elapsed = 0
-    workerFrame:SetScript("OnUpdate", function(self, delta)
+    WowNoteProfiler_SetScript(workerFrame, "OnUpdate", "Postal.OpenAllWorker", function(self, delta)
         elapsed = elapsed + (delta or 0)
-        if elapsed < 0.50 then return end
+        local interval = GetOpenAllInterval()
+        if elapsed < interval then return end
         elapsed = 0
 
         if not MailVisible() then
@@ -187,7 +239,7 @@ local function StartWorker()
 
         openAllSafetyCycles = openAllSafetyCycles + 1
         if openAllSafetyCycles > 900 then
-            Print("Open All stopped after safety timeout. Looted: " .. tostring(openAllLooted) .. ", deleted empty: " .. tostring(openAllDeleted) .. ".")
+            Print(BuildOpenAllSummary("Open All stopped after safety timeout."))
             StopWorker(false)
             return
         end
@@ -211,7 +263,7 @@ end
 
 local function OpenAll()
     if not MailVisible() then return end
-    Print("Open All started...")
+    Print("Open All started... interval " .. string.format("%.2f", GetOpenAllInterval()) .. " sec")
     RefreshInbox()
     StartWorker()
 end
@@ -273,7 +325,7 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
-frame:SetScript("OnEvent", function(self, event)
+WowNoteProfiler_SetScript(frame, "OnEvent", "Postal.Events", function(self, event)
     if event == "MAIL_CLOSED" then StopWorker(false) end
     UpdateToolbar()
 end)

@@ -3,6 +3,7 @@ local MODULE_NAME = "WowNote Auto Sell Quick Add"
 BINDING_HEADER_WOWNOTE = BINDING_HEADER_WOWNOTE or "WowNote"
 BINDING_NAME_WOWNOTE_QUICKADD_FORCE = "Quick add item to Auto Sell whitelist"
 BINDING_NAME_WOWNOTE_QUICKADD_NEVER = "Quick add item to Auto Sell blacklist"
+BINDING_NAME_WOWNOTE_QUICKADD_PROTECT = "Quick add item to WowNote Item Protection"
 
 local captureTarget = nil
 local hooked = false
@@ -21,12 +22,31 @@ local function EnsureVendorDB()
     return settings
 end
 
+local function IsAltDown()
+    return IsAltKeyDown and IsAltKeyDown() and true or false
+end
+
+local function IsCtrlDown()
+    return IsControlKeyDown and IsControlKeyDown() and true or false
+end
+
+local function IsShiftDown()
+    return IsShiftKeyDown and IsShiftKeyDown() and true or false
+end
+
 local function ModifierMatches(settings)
+    -- Exact matching is intentional: Alt+Shift is reserved for Item Protection and
+    -- must not be swallowed by Auto Sell when its modifier is configured as Alt-click.
     local mod = settings.quickAddModifier or "ALT"
-    if mod == "ALT" then return IsAltKeyDown and IsAltKeyDown() end
-    if mod == "CTRL" then return IsControlKeyDown and IsControlKeyDown() end
-    if mod == "SHIFT" then return IsShiftKeyDown and IsShiftKeyDown() end
+    local alt, ctrl, shift = IsAltDown(), IsCtrlDown(), IsShiftDown()
+    if mod == "ALT" then return alt and not ctrl and not shift end
+    if mod == "CTRL" then return ctrl and not alt and not shift end
+    if mod == "SHIFT" then return shift and not alt and not ctrl end
     return false
+end
+
+local function IsProtectionModifierDown()
+    return IsAltDown() and IsShiftDown() and not IsCtrlDown()
 end
 
 local function GetButtonItemLink(button)
@@ -43,6 +63,15 @@ end
 
 local function AddLink(target, link)
     if not link or link == "" then return false end
+    if target == "protect" then
+        if WowNote_AddProtectedItem then
+            WowNote_AddProtectedItem(link)
+        end
+        if WowNote_LootTools_RefreshProtectionList then
+            WowNote_LootTools_RefreshProtectionList()
+        end
+        return true
+    end
     if WowNote_AddAutoVendorListEntry then
         WowNote_AddAutoVendorListEntry(target == "never" and "never" or "force", link)
     end
@@ -53,8 +82,9 @@ local function AddLink(target, link)
 end
 
 function WowNote_StartAutoSellQuickAdd(target)
-    captureTarget = target == "never" and "never" or "force"
-    Print("Quick add armed for " .. (captureTarget == "never" and "Never Sell" or "Force Sell") .. ". Click a bag item to add it.")
+    captureTarget = target == "protect" and "protect" or (target == "never" and "never" or "force")
+    local label = captureTarget == "protect" and "Item Protection" or (captureTarget == "never" and "Never Sell" or "Force Sell")
+    Print("Quick add armed for " .. label .. ". Click a bag item to add it.")
 end
 
 function WowNote_QuickAddCursorItemToAutoSell(target)
@@ -78,7 +108,14 @@ function WOWNOTE_QUICKADD_NEVER()
     WowNote_QuickAddCursorItemToAutoSell("never")
 end
 
+function WOWNOTE_QUICKADD_PROTECT()
+    WowNote_QuickAddCursorItemToAutoSell("protect")
+end
+
 local function HandleBagClick(button, mouseButton)
+    if WowNote_ItemProtection_HandleBagModifiedClick and WowNote_ItemProtection_HandleBagModifiedClick(button, mouseButton) then return end
+    if WowNote_ItemProtection_HandleBagClick and WowNote_ItemProtection_HandleBagClick(button) then return end
+
     local link = GetButtonItemLink(button)
     if not link then return end
 
@@ -109,7 +146,12 @@ local function InstallHooks()
         end
         if type(ContainerFrameItemButton_OnClick) == "function" then
             hooksecurefunc("ContainerFrameItemButton_OnClick", function(button, mouseButton)
-                if captureTarget then HandleBagClick(button, mouseButton or "LeftButton") end
+                -- Fallback for clients/skins that route Alt+Shift bag clicks through OnClick
+                -- instead of OnModifiedClick. Do not run normal Auto Sell quick-add from here,
+                -- otherwise modified clicks can be handled twice.
+                if captureTarget or IsProtectionModifierDown() then
+                    HandleBagClick(button, mouseButton or "LeftButton")
+                end
             end)
         end
     end

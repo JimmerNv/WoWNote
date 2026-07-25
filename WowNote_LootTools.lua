@@ -9,11 +9,13 @@ local controls = {}
 local SELL_QUALITY_NAMES = { [0] = "Poor", [1] = "Common", [2] = "Uncommon", [3] = "Rare", [4] = "Epic" }
 local SELL_QUALITY_VALUES = { 0, 1, 2, 3, 4 }
 local QUICK_ADD_MODIFIERS = { "ALT", "CTRL", "SHIFT" }
-local QUICK_ADD_MODIFIER_NAMES = { ALT = "Alt-click", CTRL = "Ctrl-click", SHIFT = "Shift-click" }
+local QUICK_ADD_MODIFIER_NAMES = { ALT = "Alt-click only", CTRL = "Ctrl-click only", SHIFT = "Shift-click only" }
 local QUICK_ADD_TARGET_NAMES = { force = "Force Sell", never = "Never Sell" }
 local textAreaCounter = 0
 local activeTextArea = nil
 local linkHookInstalled = false
+local lootToolsControlsReady = false
+local lootToolsRefreshingControls = false
 
 local QUALITY_NAMES = {
     [2] = "Uncommon",
@@ -40,6 +42,9 @@ local function ToNumber(value, fallback)
 end
 
 local function EnsureRollDB()
+    if WowNote_GetAutoLootRollerSettings then
+        return WowNote_GetAutoLootRollerSettings()
+    end
     if type(WowNoteCharDB) ~= "table" then WowNoteCharDB = {} end
     if type(WowNoteCharDB.autoLootRoller) ~= "table" then WowNoteCharDB.autoLootRoller = {} end
     local settings = WowNoteCharDB.autoLootRoller
@@ -68,15 +73,19 @@ end
 
 local function RaiseFrame(target)
     if not target then return end
+    if WowNote_Internal and WowNote_Internal.RaiseFrame then
+        WowNote_Internal.RaiseFrame(target)
+        return
+    end
     target:SetFrameStrata("FULLSCREEN_DIALOG")
-    target:SetFrameLevel(1000)
+    target:SetFrameLevel(100)
     target:SetToplevel(true)
     if target.Raise then target:Raise() end
 end
 
 local function RaiseChild(child, parent, offset)
     if child and parent and parent.GetFrameLevel then
-        child:SetFrameLevel((parent:GetFrameLevel() or 1000) + (offset or 1))
+        child:SetFrameLevel((parent:GetFrameLevel() or 100) + (offset or 1))
     end
     return child
 end
@@ -112,8 +121,8 @@ local function MakeEdit(parent, width, height, x, y, numeric)
     edit:SetAutoFocus(false)
     if numeric then edit:SetNumeric(true) end
     edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-    edit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); WowNote_LootTools_SaveActiveTab() end)
-    edit:SetScript("OnEditFocusLost", function() WowNote_LootTools_SaveActiveTab() end)
+    edit:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SetStatus("Changed. Click Save to persist Loot Tool settings.") end)
+    edit:SetScript("OnEditFocusLost", function() SetStatus("Changed. Click Save to persist Loot Tool settings.") end)
     return edit
 end
 
@@ -183,16 +192,16 @@ local function MakeTextArea(parent, width, height, x, y)
     end)
     edit:SetScript("OnEscapePressed", function(self)
         self:ClearFocus()
-        WowNote_LootTools_SaveActiveTab()
+        SetStatus("Changed. Click Save to persist Loot Tool settings.")
     end)
     edit:SetScript("OnEditFocusLost", function(self)
         if activeTextArea == self then activeTextArea = nil end
-        WowNote_LootTools_SaveActiveTab()
+        SetStatus("Changed. Click Save to persist Loot Tool settings.")
     end)
     edit:SetScript("OnCursorChanged", function(self, cx, cy, cw, ch)
         if ScrollingEdit_OnCursorChanged then ScrollingEdit_OnCursorChanged(self, cx, cy, cw, ch) end
     end)
-    edit:SetScript("OnUpdate", function(self, elapsed)
+    WowNoteProfiler_SetScript(edit, "OnUpdate", "LootTools.EditBox", function(self, elapsed)
         if ScrollingEdit_OnUpdate then ScrollingEdit_OnUpdate(self, elapsed, self:GetParent()) end
     end)
     edit:SetScript("OnTextChanged", function(self)
@@ -208,19 +217,32 @@ local function MakeCheck(parent, text, x, y)
     check.text = check:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     check.text:SetPoint("LEFT", check, "RIGHT", -2, 0)
     check.text:SetText(text)
-    check:SetScript("OnClick", function() WowNote_LootTools_SaveActiveTab() end)
+    check:SetScript("OnClick", function()
+        SetStatus("Changed. Click Save to persist Auto Roll/Loot Tool settings.")
+    end)
     return check
 end
 
 local function SaveRollControls()
-    local settings = EnsureRollDB()
-    if controls.rollEnabled then settings.enabled = controls.rollEnabled:GetChecked() and true or false end
-    if controls.rollPreferDE then settings.preferDisenchant = controls.rollPreferDE:GetChecked() and true or false end
-    if controls.rollUseIlvl then settings.useMaxItemLevel = controls.rollUseIlvl:GetChecked() and true or false end
-    if controls.rollMinLevel then settings.minPlayerLevel = ToNumber(controls.rollMinLevel:GetText(), 80) end
-    if controls.rollMaxIlvl then settings.maxItemLevel = ToNumber(controls.rollMaxIlvl:GetText(), 220) end
-    if controls.rollBlacklist then settings.blacklist = controls.rollBlacklist:GetText() or "" end
-    SetStatus("Auto Roll settings saved for this character.")
+    local values = {
+        enabled = controls.rollEnabled and controls.rollEnabled:GetChecked() and true or false,
+        preferDisenchant = controls.rollPreferDE and controls.rollPreferDE:GetChecked() and true or false,
+        useMaxItemLevel = controls.rollUseIlvl and controls.rollUseIlvl:GetChecked() and true or false,
+        minPlayerLevel = ToNumber(controls.rollMinLevel and controls.rollMinLevel:GetText(), 80),
+        maxItemLevel = ToNumber(controls.rollMaxIlvl and controls.rollMaxIlvl:GetText(), 220),
+        blacklist = controls.rollBlacklist and controls.rollBlacklist:GetText() or "",
+        quality = controls.rollQualityValue or (EnsureRollDB().quality or 2),
+    }
+    local settings
+    if WowNote_SaveAutoLootRollerSettings then
+        settings = WowNote_SaveAutoLootRollerSettings(values)
+    else
+        settings = EnsureRollDB()
+        for key, value in pairs(values) do settings[key] = value end
+        settings.savedAt = time and time() or settings.savedAt
+    end
+    local saved = WowNote_GetAutoLootRollerSettings and WowNote_GetAutoLootRollerSettings() or settings
+    SetStatus("Auto Roll saved: enabled=" .. tostring(saved.enabled) .. ", DE=" .. tostring(saved.preferDisenchant) .. ", ilvl=" .. tostring(saved.useMaxItemLevel) .. ", savedAt=" .. tostring(saved.savedAt))
 end
 
 local function SaveSellControls()
@@ -260,6 +282,7 @@ local function SaveRepairControls()
 end
 
 function WowNote_LootTools_SaveActiveTab()
+    if lootToolsRefreshingControls or not lootToolsControlsReady then return end
     if activeTab == "roll" then SaveRollControls()
     elseif activeTab == "sell" then SaveSellControls()
     elseif activeTab == "repair" then SaveRepairControls()
@@ -274,7 +297,8 @@ local function UpdateRollControls()
     if controls.rollMinLevel then controls.rollMinLevel:SetText(tostring(settings.minPlayerLevel or 80)) end
     if controls.rollMaxIlvl then controls.rollMaxIlvl:SetText(tostring(settings.maxItemLevel or 220)) end
     if controls.rollBlacklist then controls.rollBlacklist:SetText(tostring(settings.blacklist or "")) end
-    if controls.rollQuality then controls.rollQuality:SetText("Max rarity: " .. (QUALITY_NAMES[settings.quality] or "Uncommon")) end
+    controls.rollQualityValue = tonumber(settings.quality) or 2
+    if controls.rollQuality then controls.rollQuality:SetText("Max rarity: " .. (QUALITY_NAMES[controls.rollQualityValue] or "Uncommon")) end
 end
 
 local function UpdateSellControls()
@@ -306,7 +330,7 @@ end
 
 local function CycleQuality()
     local settings = EnsureRollDB()
-    local current = settings.quality or 2
+    local current = controls.rollQualityValue or settings.quality or 2
     local nextValue = QUALITY_VALUES[1]
     for index, value in ipairs(QUALITY_VALUES) do
         if value == current then
@@ -314,25 +338,29 @@ local function CycleQuality()
             break
         end
     end
-    settings.quality = nextValue
-    UpdateRollControls()
+    controls.rollQualityValue = nextValue
+    if controls.rollQuality then controls.rollQuality:SetText("Max rarity: " .. (QUALITY_NAMES[nextValue] or "Uncommon")) end
     SaveRollControls()
 end
 
-local function SelectTab(tabName)
-    WowNote_LootTools_SaveActiveTab()
-    activeTab = tabName
+local function SelectTab(tabName, skipSave)
+    if not skipSave and frame and frame:IsShown() then
+        SetStatus("Switched tab. Use Save on each tab after changes.")
+    end
+    activeTab = tabName or "roll"
     for name, panel in pairs(panels) do
-        if name == tabName then panel:Show() else panel:Hide() end
+        if name == activeTab then panel:Show() else panel:Hide() end
     end
     for name, button in pairs(tabs) do
         button:Enable()
         if button.UnlockHighlight then button:UnlockHighlight() end
-        if name == tabName and button.LockHighlight then button:LockHighlight() end
+        if name == activeTab and button.LockHighlight then button:LockHighlight() end
     end
+    lootToolsRefreshingControls = true
     UpdateRollControls()
     UpdateSellControls()
     UpdateRepairControls()
+    lootToolsRefreshingControls = false
     SetStatus("Settings are saved per character.")
 end
 
@@ -411,6 +439,10 @@ function WowNote_LootTools_RefreshAutoSellLists()
     RefreshSellListsFromDB()
 end
 
+function WowNote_LootTools_RefreshProtectionList()
+    -- Protection uses its own window; this hook exists so quick-add can refresh if open.
+end
+
 local function CreateSellPanel(parent)
     local panel = RaiseChild(CreateFrame("Frame", nil, parent), parent, 2)
     panel:EnableMouse(true)
@@ -437,7 +469,7 @@ local function CreateSellPanel(parent)
     controls.quickAddTarget = MakeButton(panel, "Quick add target: Force Sell", 190, 24, 250, -194)
     controls.quickAddTarget:SetScript("OnClick", CycleQuickAddTarget)
 
-    MakeSmallText(panel, "Equipment auto-sell only affects Armor/Weapons up to the selected rarity and optional item level. Never Sell has priority. Lists are sorted and deduplicated when saved. You can also set key bindings for quick adding items.", 42, -224, 470)
+    MakeSmallText(panel, "Equipment auto-sell only affects Armor/Weapons up to the selected rarity and optional item level. Never Sell has priority. Alt+Shift-click protects items and is never treated as Auto Sell quick-add. Lists are sorted and deduplicated when saved.", 42, -224, 470)
 
     MakeLabel(panel, "Force Sell / Whitelist (one item name, item link, or item ID per line)", 42, -258)
     controls.forceSell = MakeTextArea(panel, 430, 62, 42, -276)
@@ -463,7 +495,13 @@ local function CreateSellPanel(parent)
         if WowNote_StartAutoSellQuickAdd then WowNote_StartAutoSellQuickAdd("never") end
     end)
 
-    local runNow = MakeButton(panel, "Run now", 90, 24, 42, -465)
+    local protect = MakeButton(panel, "Item Protection", 130, 24, 42, -465)
+    protect:SetScript("OnClick", function()
+        SaveSellControls()
+        if WowNote_OpenItemProtection then WowNote_OpenItemProtection() else SetStatus("Item Protection module is not loaded.") end
+    end)
+
+    local runNow = MakeButton(panel, "Run now", 90, 24, 182, -465)
     runNow:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_RunAutoVendorNow then WowNote_RunAutoVendorNow() end
@@ -501,14 +539,17 @@ local function CreateLootToolsUI()
     frame:SetSize(560, 520)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
-    frame:SetFrameLevel(1000)
+    frame:SetFrameLevel(100)
     frame:SetToplevel(true)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:SetScript("OnDragStart", frame.StartMoving)
     frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-    frame:SetScript("OnHide", function() WowNote_LootTools_SaveActiveTab() end)
+    frame:SetScript("OnHide", function()
+        -- Do not save hidden/stale UI state on logout or close. Explicit Save buttons
+        -- are authoritative; automatic OnHide saves caused checkbox persistence bugs.
+    end)
 
     frame:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -543,6 +584,7 @@ local function CreateLootToolsUI()
     panels.roll = CreateRollPanel(content)
     panels.sell = CreateSellPanel(content)
     panels.repair = CreateRepairPanel(content)
+    lootToolsControlsReady = true
 
     tabs.roll:SetScript("OnClick", function() SelectTab("roll") end)
     tabs.sell:SetScript("OnClick", function() SelectTab("sell") end)
@@ -559,7 +601,7 @@ end
 
 function WowNote_OpenLootTools(tabName)
     CreateLootToolsUI()
-    SelectTab(tabName or activeTab or "roll")
+    SelectTab(tabName or activeTab or "roll", true)
     frame:Show()
     RaiseFrame(frame)
 end
@@ -579,8 +621,22 @@ end
 
 function WowNote_ToggleAutoLootRoller()
     local settings = EnsureRollDB()
-    settings.enabled = not settings.enabled
+    local enabled = not settings.enabled
+    if WowNote_SaveAutoLootRollerSettings then
+        settings = WowNote_SaveAutoLootRollerSettings({ enabled = enabled })
+    else
+        settings.enabled = enabled
+    end
     Print("Auto loot roller " .. (settings.enabled and "enabled" or "disabled") .. ".")
+end
+
+function WowNote_LootTools_DebugAutoRollStorage()
+    if WowNote_DebugAutoLootRollerStorage then
+        WowNote_DebugAutoLootRollerStorage()
+    else
+        local settings = EnsureRollDB()
+        Print("Auto Roll storage: enabled=" .. tostring(settings.enabled) .. ", DE=" .. tostring(settings.preferDisenchant) .. ", useIlvl=" .. tostring(settings.useMaxItemLevel) .. ", savedAt=" .. tostring(settings.savedAt))
+    end
 end
 
 EnsureRollDB()

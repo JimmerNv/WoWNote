@@ -1,0 +1,13 @@
+WoWNote Threat Meter - source attribution
+
+The threat acquisition design in WowNote_ThreatMeter.lua was implemented from the behavior of Omen Threat Meter 3.0.9 (author: Xinhuan), supplied by the user for compatibility analysis.
+
+The integrated module uses the native World of Warcraft 3.3.5a threat API and follows Omen-compatible concepts such as event-coalesced updates, focus/target/targettarget selection, raid and pet unit scans, TPS history, and 110%/130% aggro thresholds.
+
+No Omen libraries, media assets, localization files, frames, global variables, slash commands, or SavedVariables are included in WoWNote. The supplied Omen archive did not contain an explicit top-level license statement for Omen.lua; verify redistribution terms before publishing source derived directly from that file.
+
+WoWNote Threat Helper - secure click reference
+
+The protected click-casting architecture in WowNote_ThreatHelper.lua follows the World of Warcraft 3.3.5 secure unit-button pattern used by HealBot Continued: a fixed unit token on a SecureUnitButtonTemplate and helpbutton aliases that route mouse/modifier combinations to protected spell actions.
+
+No HealBot source files, artwork, SavedVariables, configuration data, or addon libraries are bundled with WoWNote.
