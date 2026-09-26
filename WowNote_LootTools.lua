@@ -374,13 +374,24 @@ local function CreateRollPanel(parent)
     controls.rollPreferDE = MakeCheck(panel, "Prefer Disenchant if available", 22, -40)
     controls.rollUseIlvl = MakeCheck(panel, "Use max item level", 22, -70)
 
+    -- Auto Roll behaves live, like ElvUI: toggling a checkbox immediately
+    -- updates the authoritative per-character settings. The Save button remains
+    -- for explicit saves and text-area edits.
+    controls.rollEnabled:SetScript("OnClick", SaveRollControls)
+    controls.rollPreferDE:SetScript("OnClick", SaveRollControls)
+    controls.rollUseIlvl:SetScript("OnClick", SaveRollControls)
+
     MakeSmallText(panel, "Always excluded: Epic BoE items and Primordial Saronite", 42, -96, 430)
 
     MakeLabel(panel, "Only if player level >=", 42, -124)
     controls.rollMinLevel = MakeEdit(panel, 55, 22, 190, -119, true)
+    controls.rollMinLevel:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveRollControls() end)
+    controls.rollMinLevel:SetScript("OnEditFocusLost", SaveRollControls)
 
     MakeLabel(panel, "Max item level", 42, -156)
     controls.rollMaxIlvl = MakeEdit(panel, 55, 22, 190, -151, true)
+    controls.rollMaxIlvl:SetScript("OnEnterPressed", function(self) self:ClearFocus(); SaveRollControls() end)
+    controls.rollMaxIlvl:SetScript("OnEditFocusLost", SaveRollControls)
 
     controls.rollQuality = MakeButton(panel, "Max rarity: Uncommon", 180, 24, 42, -188)
     controls.rollQuality:SetScript("OnClick", CycleQuality)
@@ -472,36 +483,36 @@ local function CreateSellPanel(parent)
     MakeSmallText(panel, "Equipment auto-sell only affects Armor/Weapons up to the selected rarity and optional item level. Never Sell has priority. Alt+Shift-click protects items and is never treated as Auto Sell quick-add. Lists are sorted and deduplicated when saved.", 42, -224, 470)
 
     MakeLabel(panel, "Force Sell / Whitelist (one item name, item link, or item ID per line)", 42, -258)
-    controls.forceSell = MakeTextArea(panel, 430, 62, 42, -276)
+    controls.forceSell = MakeTextArea(panel, 450, 52, 42, -276)
 
-    MakeLabel(panel, "Never Sell / Blacklist (one item name, item link, or item ID per line)", 42, -350)
-    controls.neverSell = MakeTextArea(panel, 430, 62, 42, -368)
+    MakeLabel(panel, "Never Sell / Blacklist (one item name, item link, or item ID per line)", 42, -336)
+    controls.neverSell = MakeTextArea(panel, 450, 52, 42, -354)
 
-    local save = MakeButton(panel, "Save", 80, 24, 42, -437)
+    local save = MakeButton(panel, "Save", 80, 24, 42, -412)
     save:SetScript("OnClick", SaveSellControls)
 
-    local sort = MakeButton(panel, "Sort lists", 90, 24, 132, -437)
+    local sort = MakeButton(panel, "Sort lists", 90, 24, 132, -412)
     sort:SetScript("OnClick", SaveSellControls)
 
-    local addForce = MakeButton(panel, "Quick Force", 105, 24, 232, -437)
+    local addForce = MakeButton(panel, "Quick Force", 105, 24, 232, -412)
     addForce:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_StartAutoSellQuickAdd then WowNote_StartAutoSellQuickAdd("force") end
     end)
 
-    local addNever = MakeButton(panel, "Quick Never", 105, 24, 347, -437)
+    local addNever = MakeButton(panel, "Quick Never", 105, 24, 347, -412)
     addNever:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_StartAutoSellQuickAdd then WowNote_StartAutoSellQuickAdd("never") end
     end)
 
-    local protect = MakeButton(panel, "Item Protection", 130, 24, 42, -465)
+    local protect = MakeButton(panel, "Item Protection", 130, 24, 42, -440)
     protect:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_OpenItemProtection then WowNote_OpenItemProtection() else SetStatus("Item Protection module is not loaded.") end
     end)
 
-    local runNow = MakeButton(panel, "Run now", 90, 24, 182, -465)
+    local runNow = MakeButton(panel, "Run now", 90, 24, 182, -440)
     runNow:SetScript("OnClick", function()
         SaveSellControls()
         if WowNote_RunAutoVendorNow then WowNote_RunAutoVendorNow() end
@@ -536,7 +547,7 @@ local function CreateLootToolsUI()
     if frame then return end
 
     frame = CreateFrame("Frame", "WowNoteLootToolsFrame", UIParent)
-    frame:SetSize(560, 520)
+    frame:SetSize(580, 580)
     frame:SetPoint("CENTER")
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetFrameLevel(100)
@@ -579,7 +590,7 @@ local function CreateLootToolsUI()
     local content = RaiseChild(CreateFrame("Frame", nil, frame), frame, 3)
     content:EnableMouse(true)
     content:SetPoint("TOPLEFT", frame, "TOPLEFT", 24, -90)
-    content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 42)
+    content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 22)
 
     panels.roll = CreateRollPanel(content)
     panels.sell = CreateSellPanel(content)
@@ -591,8 +602,8 @@ local function CreateLootToolsUI()
     tabs.repair:SetScript("OnClick", function() SelectTab("repair") end)
 
     statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 24, 18)
-    statusText:SetWidth(500)
+    statusText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 24, 10)
+    statusText:SetWidth(530)
     statusText:SetJustifyH("LEFT")
     statusText:SetText("Ready")
 

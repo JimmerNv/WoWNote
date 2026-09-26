@@ -353,7 +353,7 @@ local function ApplySecureAttributes(button, unit)
         ClearDirect(prefix, mouseButton)
         if not spellName then return end
         -- Direct modified attributes are the most reliable route on 3.3.5.
-        -- The button is a SecureUnitButtonTemplate and keeps its fixed unit,
+        -- The button is a SecureActionButtonTemplate and keeps its fixed unit,
         -- so spell casts target the player row that was bound before combat.
         actionButton:SetAttribute(prefix .. "type" .. mouseButton, "spell")
         actionButton:SetAttribute(prefix .. "spell" .. mouseButton, spellName)
@@ -436,7 +436,7 @@ local function SpellIcon(value)
 end
 
 local function MakeMiniSpellButton(parent, key, label)
-    local btn = CreateFrame("Button", nil, parent, "SecureUnitButtonTemplate")
+    local btn = CreateFrame("Button", nil, parent, "SecureActionButtonTemplate")
     btn:SetWidth(20)
     btn:SetHeight(20)
     btn:RegisterForClicks("AnyUp")
@@ -514,8 +514,8 @@ end
 
 local function CreateSecureButton(parent, index, prefix)
     -- Render the bar on a normal frame and place a transparent protected
-    -- SecureUnitButtonTemplate over the complete bar. This keeps the visual
-    -- bar reliable while the click target remains a real HealBot-style unit
+    -- SecureActionButtonTemplate over the complete bar. This keeps the visual
+    -- bar reliable while the click target remains a protected action
     -- button with a fixed unit token.
     local barName = "WowNoteThreatHelper" .. prefix .. "Visual" .. index
     local actionName = "WowNoteThreatHelper" .. prefix .. index
@@ -549,7 +549,7 @@ local function CreateSecureButton(parent, index, prefix)
     b.glow:SetVertexColor(1, 0.1, 0.05, 1)
     b.glow:Hide()
 
-    local action = CreateFrame("Button", actionName, b, "SecureUnitButtonTemplate")
+    local action = CreateFrame("Button", actionName, b, "SecureActionButtonTemplate")
     action:SetPoint("TOPLEFT", b, "TOPLEFT", 44, 0)
     action:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -44, 0)
     action:SetFrameLevel(b:GetFrameLevel() + 10)

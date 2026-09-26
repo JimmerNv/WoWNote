@@ -19,7 +19,7 @@ end
 local CompressText = WNI.CompressText or function(text) return text or "" end
 local DecompressText = WNI.DecompressText or function(text) return text or "" end
 
-RP.defaultTemplate = "LFM %name %size, %tank, %heal, %dps %info %contact"
+RP.defaultTemplate = "LFM %name %size, %tank, %heal, %dps %achievement %info %contact $current/$max"
 RP.roles = { "tanks", "healers", "dps", "mdps", "rdps" }
 RP.roleLabels = {
     tanks = "Tanks",
@@ -76,10 +76,46 @@ function WowNote_RaidPlanner_CleanMessage(text)
     return text
 end
 
+function WowNote_RaidPlanner_ResolveAchievementLink(value)
+    value = Trim(value or "")
+    if value == "" then return "", nil, nil end
+
+    local achievementId = tonumber(value)
+    if not achievementId then
+        achievementId = tonumber(string.match(value, "|Hachievement:(%d+):"))
+            or tonumber(string.match(value, "achievement:(%d+):"))
+            or tonumber(string.match(value, "achievement:(%d+)$"))
+    end
+
+    achievementId = tonumber(achievementId)
+    if not achievementId or achievementId <= 0 or achievementId ~= math.floor(achievementId) then
+        return nil, "Enter a numeric achievement ID or paste an achievement link.", nil
+    end
+    if not GetAchievementLink then
+        return nil, "Achievement link API is unavailable.", achievementId
+    end
+
+    local ok, link = pcall(GetAchievementLink, achievementId)
+    if not ok or type(link) ~= "string" or link == "" then
+        return nil, "Achievement ID " .. tostring(achievementId) .. " could not be resolved.", achievementId
+    end
+    return link, nil, achievementId
+end
+
 function WowNote_RaidPlanner_UpdateHaveFromRoster()
     if RP.UpdateHaveFromRoster then
         RP.UpdateHaveFromRoster()
     end
+end
+
+local function GetCurrentGroupCount()
+    local raidCount = GetNumRaidMembers and (GetNumRaidMembers() or 0) or 0
+    if raidCount > 0 then return raidCount end
+
+    local partyCount = GetNumPartyMembers and (GetNumPartyMembers() or 0) or 0
+    if partyCount > 0 then return partyCount + 1 end
+
+    return 1
 end
 
 function WowNote_RaidPlanner_UpdatePreview()
@@ -89,9 +125,15 @@ function WowNote_RaidPlanner_UpdatePreview()
 
     local raidName = WowNote_RaidPlanner_GetText(RP.raidNameEdit, "Raid")
     local raidSize = WowNote_RaidPlanner_GetText(RP.sizeEdit, "10")
+    local currentCount = GetCurrentGroupCount()
     local info = WowNote_RaidPlanner_GetText(RP.infoEdit, "")
     local contact = WowNote_RaidPlanner_GetText(RP.contactEdit, "/w me")
     local template = WowNote_RaidPlanner_GetText(RP.templateEdit, RP.defaultTemplate)
+    local achievementInput = WowNote_RaidPlanner_GetText(RP.achievementEdit, "")
+    local achievementLink, achievementError = WowNote_RaidPlanner_ResolveAchievementLink(achievementInput)
+    local achievementText = achievementLink or (achievementInput ~= "" and "[Invalid achievement]" or "")
+    local templateHasAchievement = string.find(template, "%achievement", 1, true) ~= nil
+    RP.lastAchievementError = achievementError
 
     local tanksMissing = WowNote_RaidPlanner_GetNumber(RP.tankNeedEdit) - WowNote_RaidPlanner_GetNumber(RP.tankHaveEdit)
     local healsMissing = WowNote_RaidPlanner_GetNumber(RP.healNeedEdit) - WowNote_RaidPlanner_GetNumber(RP.healHaveEdit)
@@ -120,13 +162,19 @@ function WowNote_RaidPlanner_UpdatePreview()
     local message = template
     message = string.gsub(message, "%%name", raidName)
     message = string.gsub(message, "%%size", raidSize)
+    message = string.gsub(message, "%$current", function() return tostring(currentCount) end)
+    message = string.gsub(message, "%$max", function() return raidSize end)
     message = string.gsub(message, "%%tank", tankText)
     message = string.gsub(message, "%%heal", healText)
     message = string.gsub(message, "%%dps", dpsText)
     message = string.gsub(message, "%%mdps", "")
     message = string.gsub(message, "%%rdps", "")
+    message = string.gsub(message, "%%achievement", function() return achievementText end)
     message = string.gsub(message, "%%info", info)
     message = string.gsub(message, "%%contact", contact)
+    if achievementLink and achievementLink ~= "" and not templateHasAchievement then
+        message = message .. " " .. achievementLink
+    end
     message = WowNote_RaidPlanner_CleanMessage(message)
 
     if RP.previewEdit then RP.previewEdit:SetText(message) end
@@ -325,6 +373,7 @@ function WowNote_RaidPlanner_GetCurrentPresetData()
         channel = WowNote_RaidPlanner_GetText(RP.channelEdit, "/2"),
         template = WowNote_RaidPlanner_GetText(RP.templateEdit, RP.defaultTemplate),
         info = WowNote_RaidPlanner_GetText(RP.infoEdit, ""),
+        achievement = WowNote_RaidPlanner_GetText(RP.achievementEdit, ""),
         contact = WowNote_RaidPlanner_GetText(RP.contactEdit, "/w me"),
         internalNote = WowNote_RaidPlanner_GetText(RP.internalNoteEdit, ""),
         autoRemove = RP.autoRemoveCheck and RP.autoRemoveCheck:GetChecked() and true or false,
@@ -349,6 +398,7 @@ function WowNote_RaidPlanner_ApplyPresetData(preset, presetName)
     RP.channelEdit:SetText(preset.channel or "/2")
     RP.templateEdit:SetText(preset.template or RP.defaultTemplate)
     RP.infoEdit:SetText(preset.info or "")
+    if RP.achievementEdit then RP.achievementEdit:SetText(preset.achievement or "") end
     RP.contactEdit:SetText(preset.contact or "/w me")
     RP.internalNoteEdit:SetText(preset.internalNote or "")
     if RP.autoRemoveCheck then RP.autoRemoveCheck:SetChecked(preset.autoRemove and true or false) end
@@ -460,7 +510,7 @@ end
 
 function WowNote_RaidPlanner_SerializePreset(preset, presetName)
     preset = preset or {}
-    return "raidPresetVersion=1.1.0"
+    return "raidPresetVersion=1.2.0"
         .. "\nname=" .. PercentEncode(presetName or "")
         .. "\nsize=" .. PercentEncode(preset.size or "10")
         .. "\nraidName=" .. PercentEncode(preset.raidName or "")
@@ -477,6 +527,7 @@ function WowNote_RaidPlanner_SerializePreset(preset, presetName)
         .. "\nchannel=" .. PercentEncode(preset.channel or "/2")
         .. "\ntemplate=" .. PercentEncode(preset.template or RP.defaultTemplate)
         .. "\ninfo=" .. PercentEncode(preset.info or "")
+        .. "\nachievement=" .. PercentEncode(preset.achievement or "")
         .. "\ncontact=" .. PercentEncode(preset.contact or "/w me")
         .. "\ninternalNote=" .. PercentEncode(preset.internalNote or "")
         .. "\nautoRemove=" .. (preset.autoRemove and "1" or "0")
@@ -505,6 +556,7 @@ function WowNote_RaidPlanner_DeserializePreset(text)
         elseif key == "channel" then preset.channel = PercentDecode(value or "")
         elseif key == "template" then preset.template = PercentDecode(value or "")
         elseif key == "info" then preset.info = PercentDecode(value or "")
+        elseif key == "achievement" then preset.achievement = PercentDecode(value or "")
         elseif key == "contact" then preset.contact = PercentDecode(value or "")
         elseif key == "internalNote" then preset.internalNote = PercentDecode(value or "")
         elseif key == "autoRemove" then preset.autoRemove = value == "1"
@@ -551,6 +603,7 @@ function WowNote_RaidPlanner_Reset()
     RP.channelEdit:SetText("/2")
     RP.templateEdit:SetText(RP.defaultTemplate)
     RP.infoEdit:SetText("")
+    if RP.achievementEdit then RP.achievementEdit:SetText("") end
     RP.contactEdit:SetText("/w me")
     RP.internalNoteEdit:SetText("")
     if RP.autoRemoveCheck then RP.autoRemoveCheck:SetChecked(true) end
@@ -560,6 +613,15 @@ function WowNote_RaidPlanner_Reset()
 end
 
 function WowNote_RaidPlanner_Post()
+    local achievementInput = WowNote_RaidPlanner_GetText(RP.achievementEdit, "")
+    if achievementInput ~= "" then
+        local _, achievementError = WowNote_RaidPlanner_ResolveAchievementLink(achievementInput)
+        if achievementError then
+            WowNote_RaidPlanner_SetStatus("Achievement: " .. achievementError)
+            return
+        end
+    end
+
     local message = WowNote_RaidPlanner_UpdatePreview()
     local ok, err, channelCount = WowNote_RaidPlanner_SendToConfiguredChannel(message)
     if not ok then

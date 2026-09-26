@@ -180,50 +180,47 @@ function WowNote_BuildSideMenu(parent, makeButton)
     end
 
     AddButton("Notes", function() OpenNotes() end, "Open normal notes.")
-    AddButton("Character Notes", function()
-        HideSubmenu()
-        if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("characterNotes") then Print("Character notes module is disabled."); return end
-        if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end
-    end, "Open player-name attached notes.")
-    AddButton("Bank", function()
-        HideSubmenu()
-        if WowNote_OpenBankViewer then WowNote_OpenBankViewer() else Print("Bank module is not loaded.") end
-    end, "Open the bank viewer.")
 
-    AddButton("Port Helper", function()
-        HideSubmenu()
-        if WowNote_RaidPlanner and WowNote_RaidPlanner.ShowPortHelper then
-            WowNote_RaidPlanner.ShowPortHelper()
-        else
-            Print("Port Helper module is not loaded.")
-        end
-    end, "Open the Raid Planner summon request helper.")
+    AddButton("Character Tools", function()
+        ShowSubmenu(parent, makeButton, "Character Tools", "character", {
+            { text = "Character Notes", moduleKey = "characterNotes", tooltip = "Open player-name attached notes.", func = function() if WowNote_OpenCharacterNotes then WowNote_OpenCharacterNotes() else Print("Character Notes module is not loaded.") end end },
+            { text = "Bank", tooltip = "Open the bank viewer.", func = function() if WowNote_OpenBankViewer then WowNote_OpenBankViewer() else Print("Bank module is not loaded.") end end },
+            { text = "Talents", tooltip = "Open the talent planner.", func = function() if WowNote_OpenTalents then WowNote_OpenTalents() else Print("Talent planner is not loaded.") end end },
+            { text = "Item Tracker", tooltip = "Open the item tracker.", func = function() if WowNote_OpenItemTracker then WowNote_OpenItemTracker() else Print("Tracker module is not loaded.") end end },
+            { text = "Restock", tooltip = "Open restock rules.", func = function() if WowNote_OpenRestock then WowNote_OpenRestock() else Print("Restock module is not loaded.") end end },
+            { text = "Item Protection", tooltip = "Protect important gear from auto sell and deletion.", func = function() if WowNote_OpenItemProtection then WowNote_OpenItemProtection() else Print("Item Protection module is not loaded.") end end },
+            { text = "Sort Bags", tooltip = "Sort bags while honoring reserved slots. Protected items move only into matching reservations.", func = function() if WowNote_BagOrganizer_SortBags then WowNote_BagOrganizer_SortBags() else Print("Bag Organizer module is not loaded.") end end },
+            { text = "Sort Reserved/Protected", tooltip = "Only move items into explicitly reserved slots, including protected set items.", func = function() if WowNote_BagOrganizer_SortReservedSlots then WowNote_BagOrganizer_SortReservedSlots() else Print("Bag Organizer module is not loaded.") end end },
+            { text = "Loot Tools", tooltip = "Open auto roll, auto sell, and auto repair settings.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("roll") elseif WowNote_OpenAutoLootRoller then WowNote_OpenAutoLootRoller() else Print("Loot Tools module is not loaded.") end end },
+            { text = "Auto Sell", tooltip = "Open auto sell settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("sell") elseif WowNote_OpenAutoSell then WowNote_OpenAutoSell() else Print("Auto Sell module is not loaded.") end end },
+            { text = "Auto Repair", tooltip = "Open auto repair settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("repair") elseif WowNote_OpenAutoRepair then WowNote_OpenAutoRepair() else Print("Auto Repair module is not loaded.") end end },
+        })
+    end, "Open character notes, inventory, talents and character utility tools.")
 
-    AddButton("Threat Meter", function()
-        HideSubmenu()
-        if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("threatMeter") then Print("Threat Meter module is disabled."); return end
-        if WowNote_OpenThreatMeter then WowNote_OpenThreatMeter() else Print("Threat Meter module is not loaded.") end
-    end, "Open the Threat Meter. Use the gear in its top-right corner for configuration.")
-
-    AddButton("Threat Helper", function()
-        HideSubmenu()
-        if WowNote_IsModuleEnabled and not WowNote_IsModuleEnabled("threatMeter") then Print("Threat Meter module is disabled."); return end
-        if WowNote_OpenThreatHelper then WowNote_OpenThreatHelper() else Print("Threat Helper module is not loaded.") end
-    end, "Open combat-safe utility buttons driven by threat state.")
-
-    y = y - 8
     AddButton("Quality of Life", function()
-        ShowSubmenu(parent, makeButton, "Quality of Life", "qol", {
+        ShowSubmenu(parent, makeButton, "Quality of Life", "qualityoflife", {
+            { text = "Profession Helper", tooltip = "Queue Milling or Prospecting for selected materials in your bags. One hardware click is required per 5-item batch.", func = function() if WowNote_OpenProfessionHelper then WowNote_OpenProfessionHelper() else Print("Profession Helper module is not loaded.") end end },
+            { text = "Chat Watcher", tooltip = "Watch selected chat channels for phrases or Lua patterns and open actionable match popups.", func = function() if WowNote_OpenChatWatcher then WowNote_OpenChatWatcher() else Print("Chat Watcher module is not loaded.") end end },
+        })
+    end, "Open convenience tools that are not tied to a raid or character record.")
+
+    AddButton("Raid Tools", function()
+        ShowSubmenu(parent, makeButton, "Raid Tools", "raidtools", {
+            { text = "Raid IDs", tooltip = "Open the raid ID tracker.", func = function() if WowNote_OpenRaidIdTracker then WowNote_OpenRaidIdTracker() else Print("Raid ID tracker is not loaded.") end end },
             { text = "Raid Planner", tooltip = "Open raid planning presets and roster assignments.", func = function() if WowNote_OpenRaidPlanner then WowNote_OpenRaidPlanner() else Print("Raid Planner module is not loaded.") end end },
+            { text = "Spell Tracker", tooltip = "Track multiple ordered raid utility cooldowns with one HUD per spell, sync compatible raid members, and post orders to chat.", func = function() if WowNote_OpenRaidSpellTracker then WowNote_OpenRaidSpellTracker() else Print("Spell Tracker module is not loaded.") end end },
+            { text = "Port Helper", tooltip = "Open the Raid Planner summon request helper.", func = function() if WowNote_RaidPlanner and WowNote_RaidPlanner.ShowPortHelper then WowNote_RaidPlanner.ShowPortHelper() else Print("Port Helper module is not loaded.") end end },
+            { text = "Threat Meter", moduleKey = "threatMeter", tooltip = "Open the Threat Meter. Use the gear in its top-right corner for configuration.", func = function() if WowNote_OpenThreatMeter then WowNote_OpenThreatMeter() else Print("Threat Meter module is not loaded.") end end },
+            { text = "Threat Helper", moduleKey = "threatMeter", tooltip = "Open combat-safe utility buttons driven by threat state.", func = function() if WowNote_OpenThreatHelper then WowNote_OpenThreatHelper() else Print("Threat Helper module is not loaded.") end end },
             { text = "Bite Helper", moduleKey = "biteHelper", tooltip = "Plan and track Blood-Queen Lana'thel bite assignments.", func = function() if WowNote_OpenBiteHelper then WowNote_OpenBiteHelper(true) else Print("Bite Helper module is not loaded.") end end },
             { text = "PallyBuffs", moduleKey = "pallyBuffs", tooltip = "Open Blessing and Aura assignments.", func = function() if WowNote_OpenPallyBuffs then WowNote_OpenPallyBuffs() else Print("PallyBuffs module is not loaded.") end end },
             { text = "Cursor Effects", moduleKey = "cursorEffects", tooltip = "Configure animated effects that follow the mouse cursor.", func = function() if WowNote_OpenCursorEffects then WowNote_OpenCursorEffects() else Print("Cursor Effects module is not loaded.") end end },
             { text = "Screen Draw", tooltip = "Open the free screen drawing overlay.", func = function() if WowNote_OpenScreenDraw then WowNote_OpenScreenDraw() else Print("Screen Draw module is not loaded.") end end },
             { text = "Tactical Board", tooltip = "Open the tactical drawing board for raid tactics.", func = function() if WowNote_OpenTacticalMap then WowNote_OpenTacticalMap() else Print("Tactical Board module is not loaded.") end end },
-            { text = "Profiler", tooltip = "Profile only WowNote handlers, memory, communication and stutter attribution. Disabled by default.", func = function() if WowNote_OpenProfiler then WowNote_OpenProfiler() else Print("Profiler module is not loaded.") end end },
             { text = "Clear Tactical HUD", tooltip = "Clear the active tactical HUD overlay.", func = function() if WowNote_HudDraw_Clear then WowNote_HudDraw_Clear() else Print("Tactical HUD module is not loaded.") end end },
+            { text = "Profiler", tooltip = "Profile only WowNote handlers, memory, communication and stutter attribution. Disabled by default.", func = function() if WowNote_OpenProfiler then WowNote_OpenProfiler() else Print("Profiler module is not loaded.") end end },
         })
-    end, "Open raid planning, Bite Helper, cursor effects, PallyBuffs and draw tools.")
+    end, "Open raid planning, raid IDs, cooldown tracking, threat, buffs and raid utility tools.")
 
     AddButton("Data Transfer", function()
         ShowSubmenu(parent, makeButton, "Data Transfer", "transfer", {
@@ -236,21 +233,6 @@ function WowNote_BuildSideMenu(parent, makeButton)
             end },
         })
     end, "Open Send/Receive or Import/Export actions.")
-
-    AddButton("Character Tools", function()
-        ShowSubmenu(parent, makeButton, "Character Tools", "character", {
-            { text = "Talents", tooltip = "Open the talent planner.", func = function() if WowNote_OpenTalents then WowNote_OpenTalents() else Print("Talent planner is not loaded.") end end },
-            { text = "Raid IDs", tooltip = "Open the raid ID tracker.", func = function() if WowNote_OpenRaidIdTracker then WowNote_OpenRaidIdTracker() else Print("Raid ID tracker is not loaded.") end end },
-            { text = "Tracker", tooltip = "Open the item tracker.", func = function() if WowNote_OpenItemTracker then WowNote_OpenItemTracker() else Print("Tracker module is not loaded.") end end },
-            { text = "Sort Bags", tooltip = "Sort bags while honoring reserved slots. Protected items move only into matching reservations.", func = function() if WowNote_BagOrganizer_SortBags then WowNote_BagOrganizer_SortBags() else Print("Bag Organizer module is not loaded.") end end },
-            { text = "Sort Reserved/Protected", tooltip = "Only move items into explicitly reserved slots, including protected set items.", func = function() if WowNote_BagOrganizer_SortReservedSlots then WowNote_BagOrganizer_SortReservedSlots() else Print("Bag Organizer module is not loaded.") end end },
-            { text = "Restock", tooltip = "Open restock rules.", func = function() if WowNote_OpenRestock then WowNote_OpenRestock() else Print("Restock module is not loaded.") end end },
-            { text = "Loot Tools", tooltip = "Open auto roll, auto sell, and auto repair settings.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("roll") elseif WowNote_OpenAutoLootRoller then WowNote_OpenAutoLootRoller() else Print("Loot Tools module is not loaded.") end end },
-            { text = "Auto Sell", tooltip = "Open auto sell settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("sell") elseif WowNote_OpenAutoSell then WowNote_OpenAutoSell() else Print("Auto Sell module is not loaded.") end end },
-            { text = "Item Protection", tooltip = "Protect important gear from auto sell and deletion.", func = function() if WowNote_OpenItemProtection then WowNote_OpenItemProtection() else Print("Item Protection module is not loaded.") end end },
-            { text = "Auto Repair", tooltip = "Open auto repair settings directly.", func = function() if WowNote_OpenLootTools then WowNote_OpenLootTools("repair") elseif WowNote_OpenAutoRepair then WowNote_OpenAutoRepair() else Print("Auto Repair module is not loaded.") end end },
-        })
-    end, "Open character-related utility tools.")
 
     AddButton("Social", function()
         ShowSubmenu(parent, makeButton, "Social", "social", {

@@ -12,6 +12,8 @@ local maxItemLevelEdit
 local blacklistEdit
 local pendingRolls = {}
 local rollQueue = {}
+local pendingConfirmations = {}
+local autoRolledUIHides = {}
 local tooltipScanner
 local tooltipLines = {}
 local textAreaCounter = 0
@@ -115,6 +117,11 @@ local function GetNow()
     if time then return time() end
     if GetTime then return math.floor(GetTime()) end
     return 0
+end
+
+local function GetPreciseNow()
+    if GetTime then return GetTime() end
+    return GetNow()
 end
 
 local function HasAnyAutoRollValues(source)
@@ -455,8 +462,17 @@ local function GetRollItemData(rollID)
     local link = GetLootRollItemLink and GetLootRollItemLink(rollID) or nil
     local itemName, itemLink, itemQuality, itemLevel, requiredLevel
 
-    if link then
+    if link and GetItemInfo then
         itemName, itemLink, itemQuality, itemLevel, requiredLevel = GetItemInfo(link)
+        if not itemName then
+            local itemId = tonumber(string.match(link, "item:(%d+):"))
+            if itemId then
+                itemName, itemLink, itemQuality, itemLevel, requiredLevel = GetItemInfo(itemId)
+            end
+        end
+        if not itemName and name then
+            itemName, itemLink, itemQuality, itemLevel, requiredLevel = GetItemInfo(name)
+        end
     end
 
     return {
@@ -484,34 +500,103 @@ local function RemoveQueuedRoll(rollID)
             table.remove(rollQueue, index)
         end
     end
-
-    local nextRollID = rollQueue[1]
-    if nextRollID and pendingRolls[nextRollID] then
-        pendingRolls[nextRollID].timeLeft = math.max(pendingRolls[nextRollID].timeLeft or 0, 0.65)
-    end
 end
 
 local function ConfirmAutoRoll(rollID, rollType)
+    if not rollID then return false end
+    local tracked = pendingConfirmations[rollID]
+    if not tracked then return false end
+
+    rollType = tonumber(rollType) or tonumber(tracked.rollType)
+    if not rollType then return false end
+
+    local confirmed = false
     if ConfirmLootRoll then
-        pcall(ConfirmLootRoll, rollID, rollType)
+        local ok = pcall(ConfirmLootRoll, rollID, rollType)
+        confirmed = ok and true or false
     end
 
-    local accepted = false
+    -- UIParent normally creates the confirmation popup for the same event.
+    -- Close it as a fallback if it is already visible. Do not depend on ElvUI.
     for index = 1, 4 do
         local popup = _G["StaticPopup" .. index]
         local button = _G["StaticPopup" .. index .. "Button1"]
-        if popup and button and popup:IsShown() then
+        if popup and popup.IsShown and popup:IsShown() then
             local which = popup.which
             if which == "CONFIRM_LOOT_ROLL" or which == "CONFIRM_DISENCHANT_ROLL" then
                 local data = popup.data
                 if data == rollID or data == nil then
-                    button:Click()
-                    accepted = true
+                    if button and button.Click then
+                        button:Click()
+                    elseif popup.Hide then
+                        popup:Hide()
+                    end
+                    confirmed = true
                 end
             end
         end
     end
-    return accepted
+
+    tracked.lastConfirmedAt = GetNow()
+    tracked.lastConfirmedType = rollType
+    return confirmed
+end
+
+local function HideBlizzardLootRollFrame(rollID)
+    local maxFrames = tonumber(NUM_GROUP_LOOT_FRAMES) or 4
+    for index = 1, maxFrames do
+        local lootFrame = _G["GroupLootFrame" .. index]
+        if lootFrame and tonumber(lootFrame.rollID) == tonumber(rollID) then
+            if lootFrame.Hide then lootFrame:Hide() end
+        end
+    end
+end
+
+local function HideElvUILootRollFrame(rollID)
+    local elvui = _G.ElvUI
+    if type(elvui) ~= "table" then return end
+
+    local engine = elvui[1]
+    if type(engine) ~= "table" or type(engine.GetModule) ~= "function" then return end
+
+    local ok, misc = pcall(engine.GetModule, engine, "Misc", true)
+    if not ok or type(misc) ~= "table" or type(misc.RollBars) ~= "table" then return end
+
+    for _, lootFrame in ipairs(misc.RollBars) do
+        if lootFrame and tonumber(lootFrame.rollID) == tonumber(rollID) then
+            if type(misc.ReleaseFrame) == "function" then
+                local released = pcall(misc.ReleaseFrame, misc, lootFrame)
+                if not released and lootFrame.Hide then lootFrame:Hide() end
+            elseif lootFrame.Hide then
+                lootFrame:Hide()
+            end
+        end
+    end
+end
+
+local function HideAutoRolledLootUI(rollID)
+    if not rollID then return end
+    HideElvUILootRollFrame(rollID)
+    HideBlizzardLootRollFrame(rollID)
+end
+
+local function ScheduleAutoRolledLootUIHide(rollID)
+    if not rollID then return end
+    -- Other addons receive START_LOOT_ROLL in an undefined order. Hide now and
+    -- repeat briefly so an ElvUI bar created later in the same event is removed too.
+    autoRolledUIHides[rollID] = GetPreciseNow() + 1.0
+    HideAutoRolledLootUI(rollID)
+    if eventFrame then eventFrame:Show() end
+end
+
+local function ProcessAutoRolledLootUIHides()
+    local now = GetPreciseNow()
+    for rollID, expiresAt in pairs(autoRolledUIHides) do
+        HideAutoRolledLootUI(rollID)
+        if now >= (tonumber(expiresAt) or 0) then
+            autoRolledUIHides[rollID] = nil
+        end
+    end
 end
 
 local function EvaluateRoll(rollID, attempt)
@@ -557,12 +642,22 @@ local function EvaluateRoll(rollID, attempt)
 
     local maxQuality = tonumber(settings.quality) or 2
     if item.quality > maxQuality then
+        if attempt == 1 then
+            Print("Auto roll skipped " .. (item.link or item.name or "loot") .. ": rarity is above the configured maximum.")
+        end
         return true
     end
 
     if settings.useMaxItemLevel then
         local maxItemLevel = tonumber(settings.maxItemLevel) or 220
-        if not item.itemLevel or item.itemLevel > maxItemLevel then
+        if not item.itemLevel then
+            -- Keep retrying rather than silently treating an uncached item as ineligible.
+            return false
+        end
+        if item.itemLevel > maxItemLevel then
+            if attempt == 1 then
+                Print("Auto roll skipped " .. (item.link or item.name or "loot") .. ": item level " .. tostring(item.itemLevel) .. " is above " .. tostring(maxItemLevel) .. ".")
+            end
             return true
         end
     end
@@ -575,22 +670,39 @@ local function EvaluateRoll(rollID, attempt)
     end
 
     if rollType and RollOnLoot then
-        RollOnLoot(rollID, rollType)
-        ConfirmAutoRoll(rollID, rollType)
-        Print("Auto rolled " .. RollTypeName(rollType) .. " on " .. (item.link or item.name or "loot") .. ".")
+        -- Track the roll before calling RollOnLoot. Bind-on-pickup Greed/DE
+        -- confirmations are delivered later through CONFIRM_* events.
+        -- Handling those ourselves keeps WowNote independent from ElvUI Auto Greed/DE.
+        pendingConfirmations[rollID] = {
+            rollType = rollType,
+            createdAt = GetNow(),
+        }
+        local ok, err = pcall(RollOnLoot, rollID, rollType)
+        if ok then
+            ScheduleAutoRolledLootUIHide(rollID)
+            Print("Auto rolled " .. RollTypeName(rollType) .. " on " .. (item.link or item.name or "loot") .. ".")
+        else
+            pendingConfirmations[rollID] = nil
+            Print("Auto roll failed for " .. (item.link or item.name or "loot") .. ": " .. tostring(err))
+        end
     end
 
     return true
 end
 
-local function QueueRoll(rollID)
+local function QueueRoll(rollID, startAttempt)
     if pendingRolls[rollID] then
         return
     end
 
     pendingRolls[rollID] = {
-        timeLeft = 0.25,
-        attempt = 1,
+        -- START_LOOT_ROLL is evaluated immediately first, like ElvUI.
+        -- This fallback remains active while the roll is alive because RDF/trash
+        -- greens are often not in the local GetItemInfo cache yet.
+        timeLeft = 0.10,
+        attempt = tonumber(startAttempt) or 1,
+        startedAt = GetPreciseNow(),
+        lastMissingDataNotice = nil,
     }
     table.insert(rollQueue, rollID)
 
@@ -600,32 +712,54 @@ local function QueueRoll(rollID)
 end
 
 local function ProcessPendingRolls(elapsed)
-    local rollID = rollQueue[1]
-    if not rollID then
-        if eventFrame then eventFrame:Hide() end
+    if not next(pendingRolls) then
+        if eventFrame and not next(autoRolledUIHides) then eventFrame:Hide() end
         return
     end
 
-    local state = pendingRolls[rollID]
-    if not state then
-        table.remove(rollQueue, 1)
-        return
+    -- Process every pending roll independently. Multiple RDF/trash drops can start
+    -- at almost the same time; one uncached item must never block all later rolls.
+    local ids = {}
+    for rollID in pairs(pendingRolls) do ids[#ids + 1] = rollID end
+
+    for _, rollID in ipairs(ids) do
+        local state = pendingRolls[rollID]
+        if state then
+            state.timeLeft = (state.timeLeft or 0) - (elapsed or 0)
+            if state.timeLeft <= 0 then
+                local rollTimeLeft = nil
+                if GetLootRollTimeLeft then
+                    local ok, value = pcall(GetLootRollTimeLeft, rollID)
+                    if ok then rollTimeLeft = tonumber(value) end
+                end
+
+                -- GetLootRollTimeLeft returns milliseconds in WotLK. If the roll is
+                -- gone/expired, stop retrying. CANCEL_LOOT_ROLL also clears it.
+                if rollTimeLeft and rollTimeLeft <= 0 then
+                    RemoveQueuedRoll(rollID)
+                else
+                    local done = EvaluateRoll(rollID, state.attempt or 1)
+                    if done then
+                        RemoveQueuedRoll(rollID)
+                    else
+                        state.attempt = (state.attempt or 1) + 1
+                        state.timeLeft = 0.25
+
+                        -- Safety fallback for clients/servers where the time-left API
+                        -- never reaches zero. This is intentionally much longer than
+                        -- the old ~3 second cutoff so uncached RDF greens can resolve.
+                        local waited = GetPreciseNow() - (state.startedAt or GetPreciseNow())
+                        if waited >= 45 then
+                            Print("Auto roll gave up waiting for item data for roll " .. tostring(rollID) .. ".")
+                            RemoveQueuedRoll(rollID)
+                        end
+                    end
+                end
+            end
+        end
     end
 
-    state.timeLeft = (state.timeLeft or 0) - elapsed
-    if state.timeLeft > 0 then
-        return
-    end
-
-    local done = EvaluateRoll(rollID, state.attempt or 1)
-    if done or (state.attempt or 1) >= 10 then
-        RemoveQueuedRoll(rollID)
-    else
-        state.attempt = (state.attempt or 1) + 1
-        state.timeLeft = 0.35
-    end
-
-    if not next(pendingRolls) and eventFrame then
+    if not next(pendingRolls) and not next(autoRolledUIHides) and eventFrame then
         eventFrame:Hide()
     end
 end
@@ -727,14 +861,36 @@ local function RegisterEvents()
     eventFrame = CreateFrame("Frame")
     eventFrame:RegisterEvent("START_LOOT_ROLL")
     eventFrame:RegisterEvent("CANCEL_LOOT_ROLL")
-    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoLootRoller.Events", function(self, event, rollID)
+    eventFrame:RegisterEvent("CONFIRM_LOOT_ROLL")
+    eventFrame:RegisterEvent("CONFIRM_DISENCHANT_ROLL")
+    WowNoteProfiler_SetScript(eventFrame, "OnEvent", "AutoLootRoller.Events", function(self, event, rollID, rollType)
         if event == "START_LOOT_ROLL" and rollID then
-            QueueRoll(rollID)
+            -- Opportunistic cleanup of stale confirmation records.
+            local now = GetNow()
+            for id, info in pairs(pendingConfirmations) do
+                if not info.createdAt or (now - info.createdAt) > 180 then
+                    pendingConfirmations[id] = nil
+                end
+            end
+
+            -- ElvUI's WotLK Auto Greed/DE rolls directly from START_LOOT_ROLL.
+            -- Do the same whenever WowNote's extra filter data is ready. If item
+            -- level data is not cached yet (common for random RDF greens), keep
+            -- retrying this roll independently until the data arrives or it expires.
+            local done = EvaluateRoll(rollID, 1)
+            if not done then
+                QueueRoll(rollID, 2)
+            end
         elseif event == "CANCEL_LOOT_ROLL" and rollID then
             RemoveQueuedRoll(rollID)
+            pendingConfirmations[rollID] = nil
+            autoRolledUIHides[rollID] = nil
+        elseif (event == "CONFIRM_LOOT_ROLL" or event == "CONFIRM_DISENCHANT_ROLL") and rollID then
+            ConfirmAutoRoll(rollID, rollType)
         end
     end)
     WowNoteProfiler_SetScript(eventFrame, "OnUpdate", "AutoLootRoller.PendingRolls", function(self, elapsed)
+        ProcessAutoRolledLootUIHides()
         ProcessPendingRolls(elapsed or 0)
     end)
     eventFrame:Hide()

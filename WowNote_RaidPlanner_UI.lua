@@ -130,7 +130,7 @@ function WowNote_RaidPlanner_MakeRosterColumn(parent, role, title, x, y, width, 
     bg:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background", edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 12, insets = { left = 3, right = 3, top = 3, bottom = 3 } })
     bg:SetBackdropColor(0, 0, 0, 0.85)
 
-    local scroll = CreateFrame("ScrollFrame", nil, bg, "UIPanelScrollFrameTemplate")
+    local scroll = CreateFrame("ScrollFrame", "WowNoteRaidPlannerRoster" .. tostring(role or "Role") .. "ScrollFrame", bg, "UIPanelScrollFrameTemplate")
     scroll:SetPoint("TOPLEFT", bg, "TOPLEFT", 4, -4)
     scroll:SetPoint("BOTTOMRIGHT", bg, "BOTTOMRIGHT", -26, 4)
     scroll:EnableMouseWheel(true)
@@ -695,6 +695,13 @@ function WowNote_CreateRaidPlannerUI()
     local close = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
 
+    local spellTrackerButton = MakeButton(f, "Spell Tracker", 105, 22)
+    spellTrackerButton:SetPoint("TOPRIGHT", f, "TOPRIGHT", -150, -14)
+    spellTrackerButton:SetScript("OnClick", function()
+        if WowNote_OpenRaidSpellTracker then WowNote_OpenRaidSpellTracker() end
+    end)
+    WowNote_RaidPlanner_MakeHelp(f, spellTrackerButton, "Track ordered raid utility cooldowns such as Hand of Protection, synchronize the tracker to other WowNote users, and post the assignment order to chat.")
+
     local portHelperButton = MakeButton(f, "Port Helper", 100, 22)
     portHelperButton:SetPoint("TOPRIGHT", f, "TOPRIGHT", -42, -14)
     portHelperButton:SetScript("OnClick", function()
@@ -729,6 +736,8 @@ function WowNote_CreateRaidPlannerUI()
     splitLabel:SetText("DPS split is automatic")
     WowNote_RaidPlanner_MakeHelp(f, splitLabel, "There is only one DPS placeholder: %dps. If only the DPS row has values, %dps becomes 5 DPS. If mDPS/rDPS need values are set, %dps becomes 2 mDPS, 3 rDPS.")
 
+    RP.achievementEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Achievement (ID or link)", 590, -211, 340, "", false, 24, "Enter an achievement ID such as 2186, or paste an achievement hyperlink. WowNote converts it with GetAchievementLink so %achievement is posted as a clickable achievement link. If an older template has no %achievement placeholder, the link is appended automatically.")
+
     local rosterTitle = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     rosterTitle:SetPoint("TOPLEFT", f, "TOPLEFT", 24, -260)
     rosterTitle:SetText("Raid Roster")
@@ -755,7 +764,7 @@ function WowNote_CreateRaidPlannerUI()
 
     WowNote_RaidPlanner_CreateRosterDropDowns(f, 430, -246)
 
-    RP.templateEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Message Template", 24, -430, 672, RP.defaultTemplate, false, 28, "Available placeholders: %name, %size, %tank, %heal, %dps, %info, %contact. Empty role placeholders are cleaned up automatically.")
+    RP.templateEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Message Template", 24, -430, 672, RP.defaultTemplate, false, 28, "Available placeholders: %name, %size, %tank, %heal, %dps, %achievement, %info, %contact, $current, $max. Example: $current/$max becomes 18/25. $current uses the live group/raid size; $max uses Raid Size. %achievement becomes a clickable achievement hyperlink. Empty role placeholders are cleaned up automatically.")
     RP.infoEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Additional Info", 24, -486, 320, "", true, 54, "Optional public information appended through %info. Example: chill run, need Discord, 5.8k+.")
     RP.internalNoteEdit = WowNote_RaidPlanner_MakeLabeledEdit(f, "Internal Note (not posted)", 376, -486, 320, "", true, 54, "Private note for yourself. This text is saved in presets but never posted.")
     WowNote_RaidPlanner_CreatePresetList(f, 720, -430)

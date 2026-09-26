@@ -3,12 +3,18 @@
 
 local toolbar, openAllButton, deleteEmptyButton, cleanManabonkButton
 local workerFrame
+local toolbarRepairFrame
+local toolbarRepairRemaining = 0
+local toolbarRepairElapsed = 0
 local openAllActive = false
 local openAllIdleCycles = 0
 local openAllSafetyCycles = 0
 local openAllLooted = 0
 local openAllDeleted = 0
 local openAllStartMoney = nil
+local mailSessionActive = false
+local mailSessionLastMoney = nil
+local mailSessionGoldGained = 0
 
 local function Print(msg)
     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cffeda55fWowNote:|r " .. tostring(msg)) end
@@ -30,6 +36,35 @@ local function FormatMoneyAmount(copper)
         return string.format("%ds %02dc", silver, cop)
     end
     return string.format("%dc", cop)
+end
+
+local function UpdateMailSessionMoney()
+    if not mailSessionActive or not GetMoney then return end
+    local current = tonumber(GetMoney()) or 0
+    if mailSessionLastMoney ~= nil then
+        local delta = current - (tonumber(mailSessionLastMoney) or current)
+        -- Count only increases. Sending mail/postage or other deductions during
+        -- the mailbox session must not reduce already collected mailbox income.
+        if delta > 0 then mailSessionGoldGained = mailSessionGoldGained + delta end
+    end
+    mailSessionLastMoney = current
+end
+
+local function StartMailSession()
+    if mailSessionActive then return end
+    mailSessionActive = true
+    mailSessionGoldGained = 0
+    mailSessionLastMoney = GetMoney and (tonumber(GetMoney()) or 0) or nil
+end
+
+local function FinishMailSession()
+    if not mailSessionActive then return end
+    UpdateMailSessionMoney()
+    local gained = tonumber(mailSessionGoldGained) or 0
+    mailSessionActive = false
+    mailSessionLastMoney = nil
+    mailSessionGoldGained = 0
+    Print("Mailbox gold collected: " .. FormatMoneyAmount(gained) .. ".")
 end
 
 local function GetOpenAllGoldGained()
@@ -290,13 +325,53 @@ local function MakeButton(parent, name, text, width)
     return button
 end
 
+local function GetToolbarParent()
+    if InboxFrame then return InboxFrame end
+    if MailFrame then return MailFrame end
+    return UIParent
+end
+
+local function ConfigureToolbarFrame()
+    if not toolbar then return end
+    local parent = GetToolbarParent()
+    if parent and toolbar:GetParent() ~= parent then toolbar:SetParent(parent) end
+
+    toolbar:ClearAllPoints()
+    toolbar:SetPoint("TOPLEFT", parent, "TOPLEFT", 58, -52)
+    toolbar:SetWidth(305)
+    toolbar:SetHeight(24)
+    toolbar:EnableMouse(true)
+    if toolbar.SetFrameStrata then toolbar:SetFrameStrata("DIALOG") end
+    if toolbar.SetFrameLevel then
+        local baseLevel = parent and parent.GetFrameLevel and parent:GetFrameLevel() or 1
+        toolbar:SetFrameLevel((tonumber(baseLevel) or 1) + 20)
+    end
+
+    local function PrepareButton(button, levelOffset)
+        if not button then return end
+        button:EnableMouse(true)
+        button:Enable()
+        if button.SetFrameLevel and toolbar.GetFrameLevel then
+            button:SetFrameLevel((toolbar:GetFrameLevel() or 20) + (levelOffset or 1))
+        end
+        button:Show()
+    end
+    PrepareButton(openAllButton, 1)
+    PrepareButton(deleteEmptyButton, 1)
+    PrepareButton(cleanManabonkButton, 1)
+end
+
 local function CreateToolbar()
-    if toolbar or not CreateFrame then return end
-    local parent = InboxFrame or MailFrame or UIParent
+    if not CreateFrame then return end
+    if toolbar then
+        ConfigureToolbarFrame()
+        return
+    end
+
+    local parent = GetToolbarParent()
     toolbar = CreateFrame("Frame", "WowNotePostalLiteToolbar", parent)
     toolbar:SetWidth(305)
     toolbar:SetHeight(24)
-    toolbar:SetPoint("TOPLEFT", parent, "TOPLEFT", 58, -52)
 
     openAllButton = MakeButton(toolbar, "WowNotePostalLiteOpenAllButton", "Open All", 84)
     openAllButton:SetPoint("LEFT", toolbar, "LEFT", 0, 0)
@@ -312,20 +387,100 @@ local function CreateToolbar()
         if WowNote_SetManabonkMailCleanerEnabled then WowNote_SetManabonkMailCleanerEnabled(true) end
         if WowNote_TryCleanManabonkMail then WowNote_TryCleanManabonkMail() end
     end)
+
+    ConfigureToolbarFrame()
     toolbar:Hide()
+end
+
+local function InboxVisible()
+    if not MailVisible() then return false end
+    if InboxFrame and InboxFrame.IsShown then return InboxFrame:IsShown() end
+    return true
 end
 
 local function UpdateToolbar()
     CreateToolbar()
     if not toolbar then return end
-    if MailVisible() then toolbar:Show() else toolbar:Hide() end
+    ConfigureToolbarFrame()
+    if InboxVisible() then
+        toolbar:Show()
+        if openAllButton then openAllButton:Enable() end
+        if deleteEmptyButton then deleteEmptyButton:Enable() end
+        if cleanManabonkButton then cleanManabonkButton:Enable() end
+    else
+        toolbar:Hide()
+    end
+end
+
+local function StopToolbarRepair()
+    toolbarRepairRemaining = 0
+    toolbarRepairElapsed = 0
+    if toolbarRepairFrame then
+        WowNoteProfiler_SetScript(toolbarRepairFrame, "OnUpdate", "Postal.ToolbarRepair", nil)
+    end
+end
+
+local function StartToolbarRepair()
+    toolbarRepairRemaining = 2.0
+    toolbarRepairElapsed = 0
+    toolbarRepairFrame = toolbarRepairFrame or CreateFrame("Frame")
+    WowNoteProfiler_SetScript(toolbarRepairFrame, "OnUpdate", "Postal.ToolbarRepair", function(self, elapsed)
+        toolbarRepairRemaining = toolbarRepairRemaining - (tonumber(elapsed) or 0)
+        toolbarRepairElapsed = toolbarRepairElapsed + (tonumber(elapsed) or 0)
+        if toolbarRepairElapsed >= 0.10 then
+            toolbarRepairElapsed = 0
+            UpdateToolbar()
+        end
+        if toolbarRepairRemaining <= 0 or not MailVisible() then
+            StopToolbarRepair()
+        end
+    end)
+    UpdateToolbar()
+end
+
+local function HookMailboxFrames()
+    if InboxFrame and InboxFrame.HookScript and not InboxFrame.WowNotePostalHooked then
+        InboxFrame.WowNotePostalHooked = true
+        InboxFrame:HookScript("OnShow", function() StartToolbarRepair() end)
+        InboxFrame:HookScript("OnHide", function() UpdateToolbar() end)
+    end
+    if MailFrame and MailFrame.HookScript and not MailFrame.WowNotePostalHooked then
+        MailFrame.WowNotePostalHooked = true
+        MailFrame:HookScript("OnShow", function() StartToolbarRepair() end)
+        MailFrame:HookScript("OnHide", function() StopToolbarRepair(); UpdateToolbar() end)
+    end
 end
 
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("MAIL_SHOW")
 frame:RegisterEvent("MAIL_CLOSED")
 frame:RegisterEvent("MAIL_INBOX_UPDATE")
+frame:RegisterEvent("PLAYER_LOGIN")
 WowNoteProfiler_SetScript(frame, "OnEvent", "Postal.Events", function(self, event)
-    if event == "MAIL_CLOSED" then StopWorker(false) end
-    UpdateToolbar()
+    if event == "PLAYER_LOGIN" then
+        HookMailboxFrames()
+        UpdateToolbar()
+        return
+    elseif event == "MAIL_SHOW" then
+        StartMailSession()
+        self:RegisterEvent("PLAYER_MONEY")
+        HookMailboxFrames()
+        StartToolbarRepair()
+        return
+    elseif event == "PLAYER_MONEY" then
+        UpdateMailSessionMoney()
+        return
+    elseif event == "MAIL_CLOSED" then
+        StopWorker(false)
+        StopToolbarRepair()
+        FinishMailSession()
+        self:UnregisterEvent("PLAYER_MONEY")
+        UpdateToolbar()
+        return
+    elseif event == "MAIL_INBOX_UPDATE" then
+        -- MailFrame/InboxFrame can finish their layout a frame or two after
+        -- MAIL_SHOW. Reassert parent, frame level and enabled state here too.
+        HookMailboxFrames()
+        UpdateToolbar()
+    end
 end)

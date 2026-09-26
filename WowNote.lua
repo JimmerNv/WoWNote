@@ -325,6 +325,7 @@ InitDB = function()
     if type(WowNoteDB.pallyCompat) ~= "table" then WowNoteDB.pallyCompat = {} end
     if type(WowNoteDB.raidIds) ~= "table" then WowNoteDB.raidIds = {} end
     if type(WowNoteDB.raidPlannerPortHelper) ~= "table" then WowNoteDB.raidPlannerPortHelper = {} end
+    if type(WowNoteDB.raidSpellTracker) ~= "table" then WowNoteDB.raidSpellTracker = {} end
     if type(WowNoteDB.inventorySnapshots) ~= "table" then WowNoteDB.inventorySnapshots = {} end
     if type(WowNoteDB.bankSnapshots) ~= "table" then WowNoteDB.bankSnapshots = {} end
     if type(WowNoteDB.cursorEffects) ~= "table" then WowNoteDB.cursorEffects = {} end
@@ -4662,7 +4663,7 @@ function TitanPanelWowNoteButton_OnLoad(self)
     self.registry = {
         id = TITAN_ID,
         menuText = "WowNote",
-        version = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version") or "1.15.58",
+        version = GetAddOnMetadata and GetAddOnMetadata("WoWNote", "Version") or "1.16.42",
         category = "Information",
         buttonTextFunction = "TitanPanelWowNoteButton_GetButtonText",
         tooltipTitle = "WowNote",

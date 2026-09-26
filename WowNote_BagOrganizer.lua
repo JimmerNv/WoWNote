@@ -4,7 +4,7 @@
 -- they must contain their reserved item or stay empty whenever there is free bag space.
 
 local MODULE_NAME = "WowNote Bag Organizer"
-local VERSION = "1.15.58"
+local VERSION = "1.16.42"
 
 BINDING_NAME_WOWNOTE_BAG_RESERVE_HOVER = "Reserve hovered bag slot for current item"
 BINDING_NAME_WOWNOTE_BAG_CLEAR_HOVER = "Clear hovered bag slot reservation"
