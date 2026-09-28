@@ -56,6 +56,33 @@ local DEFAULT_BLESSING_ICONS = {
     [4] = "Interface\\Icons\\Spell_Holy_GreaterBlessingofSanctuary",
 }
 
+-- Class-aware recommendations for WotLK 3.3.5a. Other classes keep manual choice.
+-- Blessing IDs: 1 Wisdom, 2 Might, 3 Kings, 4 Sanctuary.
+local CLASS_SHORT_NAMES = { [1] = "WAR", [8] = "WL" }
+local INAPPROPRIATE_BLESSINGS = {
+    [1] = { [1] = true }, -- Warrior: no mana
+    [2] = { [1] = true }, -- Rogue: no mana
+    [3] = { [2] = true }, -- Priest: spellcaster
+    [7] = { [2] = true }, -- Mage: spellcaster
+    [8] = { [2] = true }, -- Warlock: spellcaster
+    [10] = { [1] = true }, -- Death Knight: no mana
+}
+local function IsSuitableBlessing(classId, blessingId)
+    blessingId = tonumber(blessingId) or 0
+    if blessingId == 0 then return true end
+    local excluded = INAPPROPRIATE_BLESSINGS[tonumber(classId) or 0]
+    return not (excluded and excluded[blessingId])
+end
+
+local function NextSuitableBlessing(classId, current)
+    local candidate = tonumber(current) or 0
+    for i = 1, 5 do
+        candidate = (candidate + 1) % 5
+        if IsSuitableBlessing(classId, candidate) then return candidate end
+    end
+    return 0
+end
+
 local AURA_NAMES = {
     [0] = "None",
     [1] = "Devotion Aura",
@@ -483,6 +510,7 @@ local function ApplyPreset(name)
             EnsurePally(pallyName)
             for classId = 1, MAX_CLASSES do
                 local blessingId = tonumber(preset.classes[classId]) or 0
+                if not IsSuitableBlessing(classId, blessingId) then blessingId = 0 end
                 state.assignments[pallyName][classId] = blessingId
                 PallyPower_Assignments[pallyName] = PallyPower_Assignments[pallyName] or {}
                 PallyPower_Assignments[pallyName][classId] = blessingId
@@ -965,7 +993,7 @@ local function BuildBuffSnapshot()
     local classId
     for classId = 1, MAX_CLASSES do
         local blessingId = assignments and (tonumber(assignments[classId]) or 0) or 0
-        if blessingId > 0 and blessingId <= 4 then
+        if blessingId > 0 and blessingId <= 4 and IsSuitableBlessing(classId, blessingId) then
             local classUnits = snapshot.byClass[classId] or {}
             local spellName = GetBlessingSpellName(blessingId)
             local shortName = BLESSING_NAMES[blessingId] or ""
@@ -1193,7 +1221,8 @@ local function EnsureSampleData()
     for index, name in ipairs(SAMPLE_PALLIES) do
         EnsurePally(name)
         for classId = 1, MAX_CLASSES do
-            state.assignments[name][classId] = ((classId + index) % 4) + 1
+            local candidate = ((classId + index) % 4) + 1
+            state.assignments[name][classId] = IsSuitableBlessing(classId, candidate) and candidate or NextSuitableBlessing(classId, candidate)
         end
         state.auras[name] = index
     end
@@ -1250,6 +1279,10 @@ local function SetAssignment(name, classId, blessingId)
         return
     end
     EnsurePally(name)
+    if not IsSuitableBlessing(classId, blessingId) then
+        SetStatus((CLASS_NAMES[classId] or "Class") .. " cannot use " .. (BLESSING_NAMES[blessingId] or "this blessing") .. " in smart assignment mode.")
+        return
+    end
     state.assignments[name][classId] = blessingId
     PallyPower_Assignments[name] = PallyPower_Assignments[name] or {}
     PallyPower_Assignments[name][classId] = blessingId
@@ -1268,26 +1301,25 @@ local function SetMassAssignment(name, blessingId, overwrite)
     end
     EnsurePally(name)
     local changed = 0
+    -- Send individual ASSIGN messages for filtered fills. MASSIGN would
+    -- reintroduce unsuitable assignments in native PallyPower clients.
     for classId = 1, MAX_CLASSES do
         local current = tonumber(state.assignments[name][classId]) or 0
-        if overwrite or blessingId == 0 or current == 0 then
-            state.assignments[name][classId] = blessingId
-            PallyPower_Assignments[name][classId] = blessingId
-            changed = changed + 1
-        end
-    end
-    if overwrite or blessingId == 0 then
-        SendPP("MASSIGN " .. name .. " " .. blessingId)
-    else
-        for classId = 1, MAX_CLASSES do
-            if tonumber(PallyPower_Assignments[name][classId]) == blessingId then
-                SendPP("ASSIGN " .. name .. " " .. classId .. " " .. blessingId)
+        if (overwrite or blessingId == 0 or current == 0) and IsSuitableBlessing(classId, blessingId) then
+            if current ~= blessingId then
+                state.assignments[name][classId] = blessingId
+                PallyPower_Assignments[name][classId] = blessingId
+                changed = changed + 1
+                if blessingId ~= 0 then
+                    SendPP("ASSIGN " .. name .. " " .. classId .. " " .. blessingId)
+                end
             end
         end
     end
+    if blessingId == 0 then SendPP("MASSIGN " .. name .. " 0") end
     SavePallyAssignments()
     if name == UnitName("player") then AnnounceSelf() end
-    SetStatus(name .. " -> " .. changed .. " class slots: " .. BLESSING_NAMES[blessingId] .. (overwrite and " (overwrite)" or " (empty only)"))
+    SetStatus(name .. " -> " .. changed .. " suitable class slots: " .. BLESSING_NAMES[blessingId] .. (overwrite and " (overwrite)" or " (empty only)"))
 end
 
 local function SetAura(name, auraId)
@@ -1945,11 +1977,11 @@ Refresh = function(syncNativeState, skipOverlayQueue)
                 if state.assignments[name] then
                     cur = tonumber(state.assignments[name][classId]) or 0
                 end
-                local nextValue = mouseButton == "RightButton" and 0 or ((cur + 1) % 5)
+                local nextValue = mouseButton == "RightButton" and 0 or NextSuitableBlessing(classId, cur)
                 SetAssignment(name, classId, nextValue)
                 Refresh()
             end)
-            AddTooltip(button, name .. " -> " .. CLASS_NAMES[classId], "Current blessing: " .. (BLESSING_NAMES[value] or "None") .. "\nLeft-click cycles blessings. Right-click clears this assignment.")
+            AddTooltip(button, name .. " -> " .. CLASS_NAMES[classId], "Current blessing: " .. (BLESSING_NAMES[value] or "None") .. "\nLeft-click cycles suitable blessings. Right-click clears this assignment." .. (IsSuitableBlessing(classId, value) and "" or "\nThis external or old assignment is unsuitable and will not be cast by WowNote."))
             if control then
                 button:SetAlpha(1)
                 button:EnableMouse(true)
@@ -2005,7 +2037,7 @@ local function CreateHeaderIcon(parent, x, classId)
     else
         holder.text = holder:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         holder.text:SetAllPoints(holder)
-        holder.text:SetText(string.sub(CLASS_NAMES[classId], 1, 3))
+        holder.text:SetText(CLASS_SHORT_NAMES[classId] or string.sub(CLASS_NAMES[classId], 1, 3))
     end
     AddTooltip(holder, CLASS_NAMES[classId], "Class assignment column")
     return holder
